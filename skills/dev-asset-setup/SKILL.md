@@ -1,11 +1,15 @@
 ---
 name: dev-asset-setup
-description: Initialize a branch-scoped development asset directory for the current Git repository. Use when a branch starts a new requirement stream and Codex should actively collect reusable requirement assets such as PRD, review notes, frontend/backend technical plans, test cases, links, and branch summary, then store them under one branch-named directory for future sessions.
+description: Use when a branch starts a new requirement stream or when the current branch has no development asset directory yet, and Codex should initialize a branch-named asset directory, then actively collect reusable materials such as PRD, review notes, technical plans, test cases, links, and branch summary.
 ---
 
 # Dev Asset Setup
 
 为当前 Git 分支初始化一个“开发资产目录”，并在初始化后主动向用户索要后续会复用的资料。
+
+**Announce at start:** `我先用 dev-asset-setup 为当前分支初始化开发资产目录，并补齐核心资料槽位。`
+
+**Core principle:** 初始化不只是建目录，还要主动把后续会反复引用的资料收进来。
 
 ## Workflow
 
@@ -62,3 +66,18 @@ python3 /absolute/path/to/dev-asset-setup/scripts/init_dev_assets.py --repo <rep
 - 缺资料时优先问“你有文档/链接吗”，不要直接让用户重新手打一遍。
 - 如果用户只给零散信息，先整理进正确文件，再在 `overview.md` 更新摘要。
 - 不要假设 PRD、方案、测试用例一定同时存在；缺什么就标记什么。
+
+## Always / Never
+
+**Always:**
+
+- 把目录按分支名初始化
+- 初始化后立即告诉用户缺哪些核心资料
+- 优先收文档、链接、现成记录，而不是要求用户重新组织一遍
+- 将不同类型资料分散到对应文件，而不是堆在 `overview.md`
+
+**Never:**
+
+- 只建目录不做资料 intake
+- 把评审记录、技术方案、测试口径混写在一个文件里
+- 假装已经理解需求，只因为目录初始化完成了

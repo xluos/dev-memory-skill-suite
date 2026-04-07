@@ -1,4 +1,4 @@
 interface:
   display_name: "Dev Asset Sync"
   short_description: "在提交相关对话里同步当前分支开发资产并记录 commit"
-  default_prompt: "Use $dev-asset-sync to refresh branch development assets around a Git commit."
+  default_prompt: "Use $dev-asset-sync to treat this commit-related moment as a checkpoint: sync the branch assets, then record the latest commit if one exists."

@@ -1,4 +1,4 @@
 interface:
   display_name: "Dev Asset Context"
   short_description: "读取并刷新当前分支的开发资产，作为会话默认上下文入口"
-  default_prompt: "Use $dev-asset-context to recover the current branch's development asset context before coding."
+  default_prompt: "Use $dev-asset-context to orient the current branch's saved development assets, identify missing materials, and recover context before coding."

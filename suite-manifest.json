@@ -1,6 +1,7 @@
 {
   "suite_name": "dev-asset-skill-suite",
   "skills": [
+    "using-dev-assets",
     "dev-asset-setup",
     "dev-asset-context",
     "dev-asset-sync"
