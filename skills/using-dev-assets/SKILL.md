@@ -1,6 +1,12 @@
 ---
 name: using-dev-assets
-description: Use when starting any Git-repository development conversation, before code edits, before repository exploration, before clarifying implementation details, or whenever the agent may need to silently recover, update, or sync the current branch's development assets. Be proactive: if the agent notices meaningful progress, reusable conclusions, or code changes worth recording, route into the dev-assets suite even without an explicit user request.
+description: >-
+  Use when starting any Git-repository development conversation, before code edits,
+  before repository exploration, before clarifying implementation details, or
+  whenever the agent may need to silently recover, update, or sync the current
+  branch's development assets. Be proactive: if the agent notices meaningful
+  progress, reusable conclusions, or code changes worth recording, route into
+  the dev-assets suite even without an explicit user request.
 ---
 
 # Using Dev Assets
