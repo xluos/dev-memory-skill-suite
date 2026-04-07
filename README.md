@@ -10,6 +10,10 @@ This repository packages a small skill suite for maintaining requirement continu
 - `dev-assets-update` — actively add or correct requirement context in the current branch's asset files
 - `dev-assets-sync` — treat commit-related moments as checkpoints and sync branch assets
 
+Detailed guide:
+
+- [docs/dev-asset-skill-suite-guide.md](docs/dev-asset-skill-suite-guide.md)
+
 ## Install with `npx skills`
 
 List available skills:
