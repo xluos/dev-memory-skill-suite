@@ -108,6 +108,30 @@ def normalize_context_dir(context_dir, branch_name, branch_key):
     return Path(*parts).as_posix()
 
 
+def resolve_branch_dir(repo_root, raw_context_dir, resolved_context_dir, branch_name, branch_key):
+    candidates = [
+        repo_root / resolved_context_dir / branch_key,
+        repo_root / resolved_context_dir / Path(branch_name),
+    ]
+    if raw_context_dir != resolved_context_dir:
+        candidates.extend(
+            [
+                repo_root / raw_context_dir / branch_key,
+                repo_root / raw_context_dir / Path(branch_name),
+            ]
+        )
+
+    seen = set()
+    for candidate in candidates:
+        key = candidate.as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 def get_branch_paths(repo, context_dir=None, branch=None):
     repo_root = detect_repo_root(repo)
     branch_name = branch or detect_branch(repo_root)
@@ -116,7 +140,7 @@ def get_branch_paths(repo, context_dir=None, branch=None):
     resolved_context_dir = normalize_context_dir(raw_context_dir, branch_name, branch_key)
     if not context_dir and resolved_context_dir != raw_context_dir:
         set_repo_config(repo_root, resolved_context_dir)
-    branch_dir = repo_root / resolved_context_dir / branch_key
+    branch_dir = resolve_branch_dir(repo_root, raw_context_dir, resolved_context_dir, branch_name, branch_key)
     return repo_root, branch_name, branch_key, resolved_context_dir, branch_dir
 
 
@@ -382,6 +406,30 @@ def build_auto_block(facts):
 """
 
 
+def ensure_development_auto_block(path, branch_name):
+    content = path.read_text(encoding="utf-8")
+    if AUTO_START in content and AUTO_END in content:
+        return content
+
+    marker = "## 自动同步区"
+    auto_section = (
+        f"\n\n{marker}\n\n"
+        "本区由 `dev-assets-context` 或 `dev-assets-sync` 刷新，请不要手工编辑。\n\n"
+        f"{AUTO_START}\n"
+        "_尚未同步_\n"
+        f"{AUTO_END}\n"
+    )
+
+    if marker in content:
+        before, _ = content.split(marker, 1)
+        updated = before.rstrip() + auto_section
+    else:
+        updated = content.rstrip() + auto_section
+
+    path.write_text(updated + ("" if updated.endswith("\n") else "\n"), encoding="utf-8")
+    return path.read_text(encoding="utf-8")
+
+
 def replace_auto_block(content, replacement):
     if AUTO_START not in content or AUTO_END not in content:
         raise RuntimeError("development.md is missing auto-generated markers")
@@ -391,7 +439,7 @@ def replace_auto_block(content, replacement):
 
 
 def sync_development(paths, facts):
-    current = paths["development"].read_text(encoding="utf-8")
+    current = ensure_development_auto_block(paths["development"], facts["branch"])
     updated = replace_auto_block(current, build_auto_block(facts))
     paths["development"].write_text(updated, encoding="utf-8")
 
