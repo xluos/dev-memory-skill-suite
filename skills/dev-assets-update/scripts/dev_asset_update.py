@@ -341,7 +341,7 @@ def main():
 
     show = subparsers.add_parser("show")
     show.add_argument("--repo", default=".", help="Path inside the target Git repository")
-    show.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.codex/dev-assets/repos")
+    show.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.dev-assets/repos")
     show.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
 
     suggest = subparsers.add_parser("suggest-target")
@@ -349,7 +349,7 @@ def main():
 
     write = subparsers.add_parser("write")
     write.add_argument("--repo", default=".", help="Path inside the target Git repository")
-    write.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.codex/dev-assets/repos")
+    write.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.dev-assets/repos")
     write.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
     write.add_argument("--kind", required=True, help="Kind of update to write")
     write.add_argument("--title", help="Override the default section title")
@@ -362,7 +362,7 @@ def main():
 
     touch = subparsers.add_parser("touch-manifest")
     touch.add_argument("--repo", default=".", help="Path inside the target Git repository")
-    touch.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.codex/dev-assets/repos")
+    touch.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.dev-assets/repos")
     touch.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
 
     args = parser.parse_args()

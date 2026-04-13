@@ -107,7 +107,7 @@ def main():
     for name in ("show", "sync"):
         sub = subparsers.add_parser(name)
         sub.add_argument("--repo", default=".", help="Path inside the target Git repository")
-        sub.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.codex/dev-assets/repos")
+        sub.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.dev-assets/repos")
         sub.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
 
     args = parser.parse_args()

@@ -341,7 +341,7 @@ def main():
     for name in ("sync-working-tree", "record-head", "record-session"):
         sub = subparsers.add_parser(name)
         sub.add_argument("--repo", default=".", help="Path inside the target Git repository")
-        sub.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.codex/dev-assets/repos")
+        sub.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.dev-assets/repos")
         sub.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
         if name == "record-head":
             sub.add_argument("--commit", help="Explicit commit sha to record")

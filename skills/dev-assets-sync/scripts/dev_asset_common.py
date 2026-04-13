@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-DEFAULT_STORAGE_ROOT = Path.home() / ".codex" / "dev-assets" / "repos"
+DEFAULT_STORAGE_ROOT = Path.home() / ".dev-assets" / "repos"
 DEFAULT_LEGACY_CONTEXT_DIR = ".dev-assets"
 AUTO_START = "<!-- AUTO-GENERATED-START -->"
 AUTO_END = "<!-- AUTO-GENERATED-END -->"

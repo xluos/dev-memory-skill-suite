@@ -54,7 +54,7 @@ scripts/
 By default the suite stores memory outside the repository:
 
 ```text
-~/.codex/dev-assets/repos/<repo-key>/
+~/.dev-assets/repos/<repo-key>/
   repo/
     overview.md
     context.md

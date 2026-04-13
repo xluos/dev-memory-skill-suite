@@ -31,7 +31,7 @@ python3 /absolute/path/to/dev-assets-setup/scripts/init_dev_assets.py --repo <re
 
 可选参数：
 
-- `--context-dir ~/.codex/dev-assets/repos`
+- `--context-dir ~/.dev-assets/repos`
 - `--branch <branch-name>`
 
 ## What Gets Created
@@ -39,7 +39,7 @@ python3 /absolute/path/to/dev-assets-setup/scripts/init_dev_assets.py --repo <re
 默认目录结构：
 
 ```text
-~/.codex/dev-assets/repos/<repo-key>/
+~/.dev-assets/repos/<repo-key>/
   repo/
   branches/<branch>/
 ```

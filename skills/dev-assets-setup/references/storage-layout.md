@@ -2,7 +2,7 @@
 
 Default storage root:
 
-`~/.codex/dev-assets/repos/<repo-key>/`
+`~/.dev-assets/repos/<repo-key>/`
 
 Core layout:
 

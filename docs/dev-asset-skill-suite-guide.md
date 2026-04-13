@@ -17,7 +17,7 @@
 默认目录结构：
 
 ```text
-~/.codex/dev-assets/repos/<repo-key>/
+~/.dev-assets/repos/<repo-key>/
   repo/
     overview.md
     context.md

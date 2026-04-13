@@ -10,7 +10,7 @@ from dev_asset_common import get_branch_paths, initialize_assets
 def main():
     parser = argparse.ArgumentParser(description="Initialize repo+branch development assets in user-home storage.")
     parser.add_argument("--repo", default=".", help="Path inside the target Git repository")
-    parser.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.codex/dev-assets/repos")
+    parser.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.dev-assets/repos")
     parser.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
     args = parser.parse_args()
 

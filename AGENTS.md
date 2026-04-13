@@ -15,7 +15,7 @@
 主存储默认放在用户目录，而不是仓库里：
 
 ```text
-~/.codex/dev-assets/repos/<repo-key>/
+~/.dev-assets/repos/<repo-key>/
   repo/
   branches/<branch>/
 ```
