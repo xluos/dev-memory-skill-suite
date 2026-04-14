@@ -157,8 +157,7 @@ function commandHook(positional, options) {
   runHookAction(action, repoRoot);
 }
 
-function commandInstallHooks(positional, options) {
-  const agent = positional[0] || options.agent || "codex";
+function installHooksForAgent(agent, options) {
   const isGlobal = Boolean(options.global);
   const template = loadJson(templatePathForAgent(agent));
   let targetPath;
@@ -177,13 +176,21 @@ function commandInstallHooks(positional, options) {
   writeJson(targetPath, merged);
   const report = { agent, scope, target: targetPath, events: Object.keys(template.hooks || {}) };
   if (repoRoot) report.repo_root = repoRoot;
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return report;
+}
+
+function commandInstallHooks(positional, options) {
+  const isAll = Boolean(options.all);
+  const agents = isAll ? ["codex", "claude"] : [positional[0] || options.agent || "codex"];
+  const reports = agents.map((agent) => installHooksForAgent(agent, options));
+  process.stdout.write(`${JSON.stringify(isAll ? reports : reports[0], null, 2)}\n`);
 }
 
 function printHelp() {
   process.stdout.write(`Usage:
   dev-assets hook <session-start|pre-compact|stop|session-end> [--repo PATH]
   dev-assets install-hooks <codex|claude> [--repo PATH] [--global]
+  dev-assets install-hooks --all [--repo PATH] [--global]
 
 Environment:
   DEV_ASSETS_ROOT defaults to ${DEFAULT_STORAGE_ROOT}

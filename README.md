@@ -124,6 +124,13 @@ dev-assets install-hooks codex --global              # writes ~/.codex/hooks.jso
 dev-assets install-hooks claude --global             # writes ~/.claude/settings.json
 ```
 
+Install for both agents at once with `--all`:
+
+```bash
+dev-assets install-hooks --all                       # both agents, repo-scoped
+dev-assets install-hooks --all --global              # both agents, user-level
+```
+
 Without a global CLI install, run via `npx` (downloads on demand):
 
 ```bash
