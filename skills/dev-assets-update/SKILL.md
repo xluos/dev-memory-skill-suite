@@ -1,6 +1,6 @@
 ---
 name: dev-assets-update
-description: Use when current development memory needs to be corrected, rewritten, or supplemented because the existing dev-assets are wrong, stale, missing a key premise, or the user explicitly wants a durable update. Implicit use is limited to repeated corrections or invalidated conclusions, and to newly provided relevant sources or links that should change future understanding. Do not use this skill for ordinary checkpoint summaries or one-off clarifications; use dev-assets-sync for checkpoint snapshots.
+description: Use when current development memory needs to be corrected, rewritten, or supplemented because the existing dev-assets are wrong, stale, missing a key premise, or the user explicitly wants a durable update. Implicit use also applies whenever the conversation produces new stable understanding, exposes an existing memory entry as outdated, or surfaces new shared source entry points worth keeping. Checkpoint-style "snapshot what just happened" work belongs to dev-assets-sync; this skill is for rewriting what's already there.
 ---
 
 # Dev Assets Update

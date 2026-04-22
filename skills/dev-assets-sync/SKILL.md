@@ -1,6 +1,6 @@
 ---
 name: dev-assets-sync
-description: Use when the current conversation reaches a commit-related checkpoint or another clear persistence checkpoint where this round's progress, risks, next steps, and decisions should now be snapshotted for the next session. Use this skill for commit-time, handoff-ready, lifecycle-hook, or milestone snapshots, not for correcting existing memory or persisting one-off clarifications. Repo-shared source updates here mean shared documents and links, not branch-only hot paths.
+description: Use when the current conversation reaches a commit-related checkpoint or another clear persistence checkpoint, and this round produced progress, decisions, or risks worth carrying into the next session. Implicit use applies whenever new commits land or the conversation produces a stable conclusion that the SessionStart-injected memory does not yet reflect — for example, when `development.md` "当前进展" lists commits that no longer match the head of `git log <base>..HEAD`. Repo-shared source updates here mean shared documents and links, not branch-only hot paths.
 ---
 
 # Dev Assets Sync

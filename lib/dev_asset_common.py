@@ -660,12 +660,15 @@ def join_sections(prefix, sections):
 def upsert_markdown_section(path, title, body):
     content = path.read_text(encoding="utf-8") if path.exists() else ""
     prefix, sections = split_sections(content)
+    target = title.strip()
     updated = []
     replaced = False
     for existing_title, existing_body in sections:
-        if existing_title == title:
-            updated.append((title, body))
-            replaced = True
+        if existing_title.strip() == target:
+            if not replaced:
+                updated.append((title, body))
+                replaced = True
+            # 同 title 的多余 section 直接丢弃，顺带根治已有的重复污染。
         else:
             updated.append((existing_title, existing_body))
     if not replaced:
@@ -680,12 +683,14 @@ def upsert_development_section(path, title, body):
         raise RuntimeError("development.md is missing the auto-sync section heading")
     before, after = content.split(marker, 1)
     prefix, sections = split_sections(before.rstrip())
+    target = title.strip()
     updated = []
     replaced = False
     for existing_title, existing_body in sections:
-        if existing_title == title:
-            updated.append((title, body))
-            replaced = True
+        if existing_title.strip() == target:
+            if not replaced:
+                updated.append((title, body))
+                replaced = True
         else:
             updated.append((existing_title, existing_body))
     if not replaced:
