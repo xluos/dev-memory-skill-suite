@@ -1,9 +1,11 @@
 ---
 name: using-dev-assets
 description: >-
-  Use when starting any Git-repository development conversation, before code edits,
-  before repository exploration, before clarifying implementation details, or
-  whenever the agent may need to recover, update, or sync repo+branch development memory.
+  Use when starting any Git-repository or non-git project development conversation,
+  before code edits, before repository exploration, before clarifying implementation details,
+  or whenever the agent may need to recover, update, or sync repo+branch development memory.
+  In non-git working directories, the suite degrades to a single repo-shared layer keyed off
+  a `.dev-assets-id` dotfile.
 ---
 
 # Using Dev Assets

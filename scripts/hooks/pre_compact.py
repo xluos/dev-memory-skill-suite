@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from _common import (
+    is_no_git_mode,
     is_workspace_mode,
     log,
     maybe_sync_working_tree,
@@ -11,6 +12,9 @@ from _common import (
 
 def main():
     try:
+        if is_no_git_mode():
+            log("[dev-assets][PreCompact] no-git mode: nothing to refresh (no working tree)")
+            return 0
         if is_workspace_mode():
             results = sync_working_tree_all_repos()
             if not results:

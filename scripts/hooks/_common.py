@@ -19,6 +19,7 @@ from dev_asset_common import (
     AUTO_START,
     PLACEHOLDER_MARKERS,
     asset_paths,
+    detect_no_git_mode,
     detect_workspace_mode,
     get_branch_paths,
     list_repos_in_workspace,
@@ -69,6 +70,10 @@ def resolve_assets():
 
 def is_workspace_mode():
     return detect_workspace_mode(str(REPO_ROOT))
+
+
+def is_no_git_mode():
+    return detect_no_git_mode(str(REPO_ROOT))
 
 
 def list_workspace_repos():
@@ -194,10 +199,16 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
     max_lines, max_chars = (8, 700) if full else (3, 200)
 
     parts = []
+    no_git = assets.get("branch_name") is None
     if heading is None:
-        parts.append(
-            f"已加载 dev-assets：repo `{assets['repo_key']}`，branch `{assets['branch_name']}`。"
-        )
+        if no_git:
+            parts.append(
+                f"已加载 dev-assets（no-git 模式）：项目 `{assets['repo_key']}`。"
+            )
+        else:
+            parts.append(
+                f"已加载 dev-assets：repo `{assets['repo_key']}`，branch `{assets['branch_name']}`。"
+            )
         parts.append(f"主存储目录：`{assets['branch_dir']}`")
     else:
         parts.append(heading)
@@ -209,10 +220,13 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
 
 def build_session_start_context():
     assets = resolve_assets()
-    try:
-        maybe_sync_context()
-    except Exception as exc:
-        log(f"[dev-assets][SessionStart] refresh skipped: {exc}")
+    # no-git mode skips maybe_sync_context() because that path runs git commands
+    # (working-tree diffing, focus-area detection) that don't apply here.
+    if assets.get("branch_name") is not None:
+        try:
+            maybe_sync_context()
+        except Exception as exc:
+            log(f"[dev-assets][SessionStart] refresh skipped: {exc}")
     return _build_context_from_assets(assets, full=True)
 
 

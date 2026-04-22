@@ -1,6 +1,6 @@
 ---
 name: dev-assets-setup
-description: Use when a branch starts a new requirement stream or when the current repository has no dev-assets entry for the current branch yet, and Codex should initialize user-home repo+branch memory storage, then collect the branch's current summary and shared source entry points.
+description: Use when a branch starts a new requirement stream or when the current repository has no dev-assets entry for the current branch yet, and Codex should initialize user-home repo+branch memory storage, then collect the branch's current summary and shared source entry points. Also use in non-git working directories that need persistent project memory — setup detects no-git mode and degrades to a single repo-shared layer keyed off a `.dev-assets-id` dotfile, no branch layer is created.
 ---
 
 # Dev Assets Setup

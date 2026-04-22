@@ -1,6 +1,6 @@
 ---
 name: dev-assets-context
-description: Use when starting work in any Git repository conversation on an existing branch, before code edits or repo exploration, when Codex should first recover the current branch's saved development memory, then pull repo-shared memory only if needed.
+description: Use when starting work in any Git repository conversation on an existing branch, before code edits or repo exploration, when Codex should first recover the current branch's saved development memory, then pull repo-shared memory only if needed. In non-git working directories (no branch concept), this skill recovers the single repo-shared layer instead.
 ---
 
 # Dev Assets Context

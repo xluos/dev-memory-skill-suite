@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from _common import (
+    is_no_git_mode,
     is_workspace_mode,
     log,
     maybe_record_head,
@@ -11,6 +12,9 @@ from _common import (
 
 def main():
     try:
+        if is_no_git_mode():
+            log("[dev-assets][SessionEnd] no-git mode: nothing to finalize (no HEAD)")
+            return 0
         if is_workspace_mode():
             results = record_head_all_repos()
             if not results:

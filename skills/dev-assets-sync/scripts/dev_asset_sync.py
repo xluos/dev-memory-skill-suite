@@ -5,6 +5,13 @@ import json
 import sys
 from pathlib import Path
 
+# Prefer the bundled lib/ when available so all skills share one source. The
+# local skill-copy of dev_asset_common.py only kicks in for portable installs
+# where lib/ is missing.
+_lib = Path(__file__).resolve().parents[3] / "lib"
+if _lib.exists() and str(_lib) not in sys.path:
+    sys.path.insert(0, str(_lib))
+
 from dev_asset_common import (
     asset_paths,
     collect_git_facts,

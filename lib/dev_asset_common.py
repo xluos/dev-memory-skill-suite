@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,8 @@ from urllib.parse import urlparse
 
 DEFAULT_STORAGE_ROOT = Path.home() / ".dev-assets" / "repos"
 DEFAULT_LEGACY_CONTEXT_DIR = ".dev-assets"
+DEV_ASSETS_ID_FILE = ".dev-assets-id"
+NO_GIT_BRANCH_SENTINEL = "_no_git"
 AUTO_START = "<!-- AUTO-GENERATED-START -->"
 AUTO_END = "<!-- AUTO-GENERATED-END -->"
 PLACEHOLDER_MARKERS = ("待补充", "待刷新", "_尚未同步_")
@@ -162,6 +165,87 @@ def detect_repo_identity(repo_root):
     }
 
 
+def detect_no_git_mode(cwd=None):
+    """Return True iff cwd is not inside any git repo AND has no first-level
+    git-repo subdirs (i.e. it's neither single-repo nor workspace mode).
+
+    The caller can then fall back to .dev-assets-id-based identity. Existing
+    git-aware behavior is unaffected.
+    """
+    base = Path(cwd or ".").resolve()
+    if not base.exists() or not base.is_dir():
+        return False
+    probe = run_git(["rev-parse", "--show-toplevel"], cwd=base, check=False)
+    if probe.returncode == 0 and probe.stdout.strip():
+        return False
+    if list_repos_in_workspace(base):
+        return False
+    return True
+
+
+def read_or_create_dev_assets_id(cwd):
+    """Read `.dev-assets-id` from cwd; create with a fresh uuid when missing.
+
+    The file pins identity across directory moves/renames, which matters for
+    no-git mode where we can't lean on `git remote` for stability. Returns the
+    parsed payload (always contains "id").
+    """
+    cwd_path = Path(cwd).resolve()
+    id_file = cwd_path / DEV_ASSETS_ID_FILE
+    if id_file.exists():
+        try:
+            payload = json.loads(id_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("id"):
+            return payload
+    payload = {
+        "id": str(uuid.uuid4()),
+        "name": cwd_path.name,
+        "created_at": now_iso(),
+    }
+    id_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return payload
+
+
+def detect_repo_identity_no_git(cwd):
+    """Identity for non-git directories. Uses `.dev-assets-id` so the repo_key
+    survives moves/renames (a path-only hash would not).
+    """
+    cwd_path = Path(cwd).resolve()
+    payload = read_or_create_dev_assets_id(cwd_path)
+    name = sanitize_repo_name(payload.get("name") or cwd_path.name)
+    digest = hashlib.sha1(payload["id"].encode("utf-8")).hexdigest()[:12]
+    return {
+        "repo_identity": f"no-git:{payload['id']}",
+        "repo_identity_source": "dev-assets-id",
+        "repo_key": f"{name}-{digest}",
+    }
+
+
+def get_no_git_paths(cwd, context_dir=None):
+    """Resolve storage paths for no-git mode. Mirrors get_branch_paths()'s
+    return shape so callers can stay polymorphic. branch_name/branch_key are
+    None to signal degraded mode.
+    """
+    cwd_path = Path(cwd).resolve()
+    storage_root = (
+        Path(context_dir).expanduser().resolve() if context_dir
+        else (
+            Path(os.environ.get("DEV_ASSETS_ROOT", "").strip()).expanduser().resolve()
+            if os.environ.get("DEV_ASSETS_ROOT", "").strip()
+            else DEFAULT_STORAGE_ROOT.expanduser().resolve()
+        )
+    )
+    identity = detect_repo_identity_no_git(cwd_path)
+    repo_dir = storage_root / identity["repo_key"]
+    # In no-git mode "branch_dir" points at the repo-shared layer so the rest
+    # of the codebase keeps working without polymorphism explosions; readers
+    # that care will see branch_name=None and short-circuit.
+    branch_dir = repo_dir / "repo"
+    return cwd_path, None, None, storage_root, identity["repo_key"], repo_dir, branch_dir
+
+
 def _resolve_workspace_repo(repo):
     """If `repo` points to a workspace root (cwd is not a git repo, but first-level
     subdirs are), redirect to the primary repo via `DEV_ASSETS_PRIMARY_REPO` env.
@@ -189,6 +273,11 @@ def _resolve_workspace_repo(repo):
 
 
 def get_branch_paths(repo, context_dir=None, branch=None):
+    # no-git mode short-circuit: when cwd is neither a git repo nor a workspace,
+    # fall through to the dotfile-based identity resolver. branch info is None
+    # to signal callers that branch-specific files don't exist.
+    if branch is None and detect_no_git_mode(repo):
+        return get_no_git_paths(repo, context_dir)
     repo = _resolve_workspace_repo(repo)
     repo_root = detect_repo_root(repo)
     branch_name = branch or detect_branch(repo_root)
@@ -249,12 +338,29 @@ def get_all_branch_paths(cwd=None, context_dir=None):
 
 def asset_paths(repo_dir, branch_dir):
     repo_memory_dir = repo_dir / "repo"
-    return {
+    paths = {
         "repo_manifest": repo_memory_dir / "manifest.json",
         "repo_overview": repo_memory_dir / "overview.md",
         "repo_context": repo_memory_dir / "context.md",
         "repo_sources": repo_memory_dir / "sources.md",
         "repo_artifacts": repo_memory_dir / "artifacts",
+    }
+    # no-git mode: branch_dir is the repo-shared layer itself. Point branch
+    # keys at the same files (overview/context/sources collapse onto repo-
+    # level), with development.md kept as a separate file under repo/ so it
+    # still has a place to live for "current progress" notes in non-git dirs.
+    if branch_dir == repo_memory_dir:
+        paths.update({
+            "manifest": paths["repo_manifest"],
+            "overview": paths["repo_overview"],
+            "development": repo_memory_dir / "development.md",
+            "context": paths["repo_context"],
+            "sources": paths["repo_sources"],
+            "artifacts": paths["repo_artifacts"],
+            "history": repo_memory_dir / "artifacts" / "history",
+        })
+        return paths
+    paths.update({
         "manifest": branch_dir / "manifest.json",
         "overview": branch_dir / "overview.md",
         "development": branch_dir / "development.md",
@@ -262,7 +368,8 @@ def asset_paths(repo_dir, branch_dir):
         "sources": branch_dir / "sources.md",
         "artifacts": branch_dir / "artifacts",
         "history": branch_dir / "artifacts" / "history",
-    }
+    })
+    return paths
 
 
 def ensure_file(path, content):
@@ -372,6 +479,18 @@ def template_sources():
     )
 
 
+def template_development_no_git(project_name):
+    return render_title_doc(
+        "当前开发状态（no-git 模式）",
+        [
+            ("项目", f"- {project_name}"),
+            ("当前进展", "- 待补充"),
+            ("阻塞与注意点", "- 待补充"),
+            ("下一步", "- 待补充"),
+        ],
+    )
+
+
 def template_repo_overview(repo_name):
     return render_title_doc(
         "仓库共享概览",
@@ -408,11 +527,11 @@ def template_repo_sources():
     )
 
 
-def build_repo_manifest(repo_root, storage_root, repo_key, identity):
-    return {
+def build_repo_manifest(repo_root, storage_root, repo_key, identity, *, no_git=False):
+    manifest = {
         "schema_version": 3,
         "scope": "repo",
-        "storage_mode": "user-home-repo-plus-branch",
+        "storage_mode": "user-home-no-git" if no_git else "user-home-repo-plus-branch",
         "repo_root": str(repo_root),
         "repo_key": repo_key,
         "repo_identity": identity["repo_identity"],
@@ -424,6 +543,9 @@ def build_repo_manifest(repo_root, storage_root, repo_key, identity):
         "last_seen_head": None,
         "default_base": None,
     }
+    if no_git:
+        manifest["no_git"] = True
+    return manifest
 
 
 def build_branch_manifest(repo_root, branch_name, branch_key, storage_root, repo_key):
@@ -477,20 +599,33 @@ def migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir)
 def initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir):
     repo_memory_dir = repo_dir / "repo"
     repo_memory_dir.mkdir(parents=True, exist_ok=True)
-    branch_dir.mkdir(parents=True, exist_ok=True)
-    set_storage_root_config(repo_root, storage_root)
+    no_git = branch_name is None and branch_dir == repo_memory_dir
+    if not no_git:
+        branch_dir.mkdir(parents=True, exist_ok=True)
+        set_storage_root_config(repo_root, storage_root)
 
-    identity = detect_repo_identity(repo_root)
-    migration = migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir)
+    if no_git:
+        identity = detect_repo_identity_no_git(repo_root)
+    else:
+        identity = detect_repo_identity(repo_root)
+    migration = None if no_git else migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir)
     paths = asset_paths(repo_dir, branch_dir)
     paths["repo_artifacts"].mkdir(exist_ok=True)
-    paths["artifacts"].mkdir(exist_ok=True)
-    paths["history"].mkdir(parents=True, exist_ok=True)
+    if not no_git:
+        paths["artifacts"].mkdir(exist_ok=True)
+        paths["history"].mkdir(parents=True, exist_ok=True)
 
-    ensure_manifest(paths["repo_manifest"], build_repo_manifest(repo_root, storage_root, repo_key, identity))
+    ensure_manifest(paths["repo_manifest"], build_repo_manifest(repo_root, storage_root, repo_key, identity, no_git=no_git))
     ensure_file(paths["repo_overview"], template_repo_overview(repo_root.name))
     ensure_file(paths["repo_context"], template_repo_context())
     ensure_file(paths["repo_sources"], template_repo_sources())
+
+    if no_git:
+        # In no-git mode "branch" files alias onto repo-shared files; only
+        # development.md is its own thing so we seed it with a degraded
+        # template that doesn't mention a branch name.
+        ensure_file(paths["development"], template_development_no_git(repo_root.name))
+        return paths
 
     ensure_manifest(paths["manifest"], build_branch_manifest(repo_root, branch_name, branch_key, storage_root, repo_key))
     ensure_file(paths["overview"], template_overview(branch_name))
