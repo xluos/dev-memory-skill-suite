@@ -1,5 +1,5 @@
 {
-  "suite_name": "dev-asset-skill-suite",
+  "suite_name": "dev-assets-skill-suite",
   "skills": [
     "using-dev-assets",
     "dev-assets-setup",

@@ -26,7 +26,7 @@ sh scripts/install_codex_hooks.sh
 如果只是想直接从 GitHub 拉脚本并把模板 merge 到当前目录的 `.codex/hooks.json`：
 
 ```bash
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/xluos/dev-asset-skill-suite/main/scripts/install_codex_hooks.sh)"
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/xluos/dev-assets-skill-suite/main/scripts/install_codex_hooks.sh)"
 ```
 
 这个脚本会先安装 `@xluos/dev-assets-cli`，然后再 merge Codex hooks。

@@ -1,8 +1,8 @@
-# Dev Asset Skill Suite 使用说明
+# Dev Assets Skill Suite 使用说明
 
 ## 套件作用
 
-`dev-asset-skill-suite` 是一套围绕 Git 仓库和 Git 分支工作的开发资产技能。
+`dev-assets-skill-suite` 是一套围绕 Git 仓库和 Git 分支工作的开发资产技能。
 
 它解决的问题不是“怎么写代码”，而是：
 
