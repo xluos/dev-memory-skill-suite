@@ -1,4 +1,4 @@
 interface:
   display_name: "Using Dev Assets"
   short_description: "Git 仓库开发对话的入口路由，先判断是否进入分支记忆套件"
-  default_prompt: "Use $using-dev-assets at the start of Git-repository development work to decide whether to route into dev-assets-context, dev-assets-setup, dev-assets-update, or dev-assets-sync first."
+  default_prompt: "Use $using-dev-assets at the start of Git-repository development work to decide whether to route into dev-assets-context, dev-assets-setup, dev-assets-capture, or dev-assets-graduate first."

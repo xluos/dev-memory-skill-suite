@@ -147,6 +147,28 @@ def command_apply(args):
         print(json.dumps({"error": f"harvest file empty or missing: {args.harvest_file}"}, ensure_ascii=False))
         return 1
 
+    # Reject unknown top-level keys explicitly. The most common failure mode
+    # is a pre-v2 harvest.json still using repo_context / repo_sources —
+    # without this check those entries would be silently dropped while
+    # archive=true still mv'd the branch away, leaving the shared layer
+    # un-updated with no visible error.
+    known_keys = {"repo_overview", "repo_decisions", "repo_glossary", "notes", "archive"}
+    unknown_keys = sorted(k for k in harvest.keys() if k not in known_keys)
+    if unknown_keys:
+        legacy_hint = ""
+        if any(k in {"repo_context", "repo_sources"} for k in unknown_keys):
+            legacy_hint = (
+                " (v1 schema? repo_context → repo_decisions or repo_glossary; "
+                "repo_sources → repo_glossary; see references/harvest-schema.md)"
+            )
+        print(
+            json.dumps(
+                {"error": f"unknown harvest key(s): {unknown_keys}{legacy_hint}"},
+                ensure_ascii=False,
+            )
+        )
+        return 1
+
     paths = asset_paths(repo_dir, branch_dir)
 
     # v2: the harvest target keys match the new repo-shared files.

@@ -674,9 +674,16 @@ _V1_REPO_SECTION_MAP = {
 }
 
 
-def _collect_v1_sections(path, section_map):
+def _collect_v1_sections(path, section_map, *, default_target=None):
     """Read a v1 markdown file and bucket its sections by target v2 key.
     Returns {v2_key: [(title, body), ...]}.
+
+    Unknown sections (not in section_map) are routed to `default_target` with
+    their original title preserved. Since the migration then deletes the v1
+    file, silently discarding unknowns would mean unrecoverable data loss for
+    any user-authored custom sections. Branch-layer callers pass
+    default_target="unsorted"; repo-layer callers pass "repo_glossary".
+    Set default_target=None to opt back into the old silent-drop behavior.
     """
     if not path.exists():
         return {}
@@ -687,12 +694,16 @@ def _collect_v1_sections(path, section_map):
         if t == "分支" or t == "仓库":
             continue
         mapping = section_map.get(t)
-        if not mapping:
-            # Unknown section from legacy — drop into unsorted for branch
-            # layer, or glossary for repo (conservative default).
+        if mapping:
+            target_key, new_title = mapping
+            new_title = new_title or t
+        elif default_target is not None:
+            # Preserve the original title so the user can tell what was
+            # unrecognised when they clean up unsorted.md manually.
+            target_key = default_target
+            new_title = t
+        else:
             continue
-        target_key, new_title = mapping
-        new_title = new_title or t
         buckets.setdefault(target_key, []).append((new_title, body))
     return buckets
 
@@ -735,10 +746,12 @@ def migrate_v1_to_v2_branch(branch_dir, branch_name):
     if not any(p.exists() for p in (old_dev, old_ctx, old_src)):
         return None
 
-    # Collect sections from all v1 files, bucketed by v2 target key.
+    # Collect sections from all v1 files, bucketed by v2 target key. Unknown
+    # sections land in "unsorted" so nothing is lost when the v1 files get
+    # deleted below — the user can triage them via dev-assets-setup later.
     merged_buckets = {}
     for v1_path in (old_dev, old_ctx, old_src):
-        buckets = _collect_v1_sections(v1_path, _V1_BRANCH_SECTION_MAP)
+        buckets = _collect_v1_sections(v1_path, _V1_BRANCH_SECTION_MAP, default_target="unsorted")
         for k, entries in buckets.items():
             merged_buckets.setdefault(k, []).extend(entries)
 
@@ -780,6 +793,33 @@ def migrate_v1_to_v2_branch(branch_dir, branch_name):
         )
         written.append(f"{key}.md")
 
+    # Unknown legacy sections go into unsorted.md under a dedicated
+    # "legacy v1 未识别段落" group. Keeping the original section titles
+    # here is the whole point — the user can see what got stranded and
+    # classify properly via setup merge-unsorted.
+    unsorted_entries = merged_buckets.get("unsorted")
+    if unsorted_entries:
+        legacy_body = "\n\n".join(
+            f"### {t}\n\n{b.strip()}" for t, b in unsorted_entries
+        )
+        target = branch_dir / "unsorted.md"
+        target.write_text(
+            render_title_doc(
+                "未分类条目",
+                [
+                    header,
+                    (
+                        "legacy v1 未识别段落",
+                        "以下 section 在 v1 → v2 迁移时无法自动分类。"
+                        "请走 `dev-assets-setup merge-unsorted` 分到 decisions / "
+                        "progress / risks / glossary。\n\n" + legacy_body,
+                    ),
+                ],
+            ),
+            encoding="utf-8",
+        )
+        written.append("unsorted.md")
+
     # Delete old v1 files after successful migration.
     removed = []
     for p in (old_dev, old_ctx, old_src):
@@ -801,9 +841,12 @@ def migrate_v1_to_v2_repo(repo_memory_dir, repo_name):
     if not any(p.exists() for p in (old_ctx, old_src)):
         return None
 
+    # Unknown repo-layer sections fall to repo_glossary — it's the closest
+    # shared-layer home and gets an explicit subsection so the user can
+    # triage later.
     merged_buckets = {}
     for v1_path in (old_ctx, old_src):
-        buckets = _collect_v1_sections(v1_path, _V1_REPO_SECTION_MAP)
+        buckets = _collect_v1_sections(v1_path, _V1_REPO_SECTION_MAP, default_target="repo_glossary")
         for k, entries in buckets.items():
             merged_buckets.setdefault(k, []).extend(entries)
 
