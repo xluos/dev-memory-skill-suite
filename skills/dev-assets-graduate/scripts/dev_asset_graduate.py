@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+dev-assets-graduate: harvest cross-branch reusable knowledge from a branch's
+v2 memory, then archive the branch dir under `branches/_archived/`.
+
+In v2, the harvest source is preferentially `pending-promotion.md` (content
+that capture auto-staged as cross-branch-reusable) plus `decisions.md`. We
+still dump progress/risks/glossary in dry-run so the human can spot anything
+the heuristic missed, but the primary signal is pending-promotion.
+"""
 
 import argparse
 import json
@@ -6,9 +15,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Prefer the bundled lib/ when available so the graduate skill stays in sync
-# with the rest of the suite. There is no scripts-local copy of
-# dev_asset_common.py here — graduate is lib-only by design.
 _lib = Path(__file__).resolve().parents[3] / "lib"
 if _lib.exists() and str(_lib) not in sys.path:
     sys.path.insert(0, str(_lib))
@@ -42,9 +48,6 @@ def _read_sections(path):
 def _git_status(repo_root, default_base):
     if default_base is None:
         return {"ahead": None, "uncommitted": None, "default_base": None}
-    ahead = len(git_lines(["rev-list", "--count", f"{default_base}..HEAD"], cwd=repo_root, check=False) or [])
-    # rev-list --count returns one line with a number; lines parsing above is
-    # off — use stdout directly:
     raw = git_stdout(["rev-list", "--count", f"{default_base}..HEAD"], cwd=repo_root, check=False)
     try:
         ahead = int(raw)
@@ -78,25 +81,32 @@ def command_dry_run(args):
         "branch_dir": str(branch_dir),
         "archive_destination": str(archive_root_dir(repo_dir) / f"{branch_key}__{datetime.now(timezone.utc).strftime('%Y%m%d')}"),
         "git_status": _git_status(repo_root, default_base),
-        "branch_files": {
-            "development.md": _read_sections(paths["development"]),
-            "context.md": _read_sections(paths["context"]),
-            "sources.md": _read_sections(paths["sources"]),
+        # v2: primary harvest source is pending-promotion.md (capture-staged
+        # cross-branch candidates) plus decisions.md. Progress/risks/glossary
+        # are dumped only for human cross-check.
+        "primary_sources": {
+            "pending-promotion.md": _read_sections(paths["pending_promotion"]),
+            "decisions.md": _read_sections(paths["decisions"]),
+        },
+        "cross_check_sources": {
+            "progress.md": _read_sections(paths["progress"]),
+            "risks.md": _read_sections(paths["risks"]),
+            "glossary.md": _read_sections(paths["glossary"]),
             "overview.md": _read_sections(paths["overview"]),
         },
         "repo_files": {
             "overview.md": _read_sections(paths["repo_overview"]),
-            "context.md": _read_sections(paths["repo_context"]),
-            "sources.md": _read_sections(paths["repo_sources"]),
+            "decisions.md": _read_sections(paths["repo_decisions"]),
+            "glossary.md": _read_sections(paths["repo_glossary"]),
         },
         "harvest_targets": {
             "repo_overview": ["长期目标与边界", "仓库级关键约束"],
-            "repo_context": ["长期有效背景", "跨分支通用决策", "共享注意点"],
-            "repo_sources": ["共享入口"],
+            "repo_decisions": ["跨分支通用决策"],
+            "repo_glossary": ["长期有效背景", "共享入口", "共享注意点"],
         },
         "instructions": (
-            "读 branch_files 抓取通用知识（剥离业务名词后），按 harvest-schema.md 写出 harvest.json，"
-            "确认无误后跑 graduate apply。"
+            "优先读 primary_sources 抓取通用知识（剥离业务名词后），按 harvest-schema.md 写出 harvest.json。"
+            "cross_check_sources 只做漏网之鱼检查，不是主源。确认无误后跑 graduate apply。"
         ),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -104,7 +114,6 @@ def command_dry_run(args):
 
 
 def _apply_entries(target_path, entries):
-    """entries: list of {section, body, mode}. Returns count applied."""
     n = 0
     for entry in entries or []:
         section = entry.get("section")
@@ -140,10 +149,11 @@ def command_apply(args):
 
     paths = asset_paths(repo_dir, branch_dir)
 
+    # v2: the harvest target keys match the new repo-shared files.
     applied = {
         "repo_overview": _apply_entries(paths["repo_overview"], harvest.get("repo_overview")),
-        "repo_context": _apply_entries(paths["repo_context"], harvest.get("repo_context")),
-        "repo_sources": _apply_entries(paths["repo_sources"], harvest.get("repo_sources")),
+        "repo_decisions": _apply_entries(paths["repo_decisions"], harvest.get("repo_decisions")),
+        "repo_glossary": _apply_entries(paths["repo_glossary"], harvest.get("repo_glossary")),
     }
     total = sum(applied.values())
 

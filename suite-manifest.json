@@ -4,8 +4,7 @@
     "using-dev-assets",
     "dev-assets-setup",
     "dev-assets-context",
-    "dev-assets-update",
-    "dev-assets-sync",
+    "dev-assets-capture",
     "dev-assets-graduate"
   ],
   "legacy_skills": [
@@ -13,6 +12,8 @@
     "branch-context-setup",
     "dev-asset-setup",
     "dev-asset-context",
-    "dev-asset-sync"
+    "dev-asset-sync",
+    "dev-assets-sync",
+    "dev-assets-update"
   ]
 }

@@ -20,13 +20,26 @@ NO_GIT_BRANCH_SENTINEL = "_no_git"
 AUTO_START = "<!-- AUTO-GENERATED-START -->"
 AUTO_END = "<!-- AUTO-GENERATED-END -->"
 PLACEHOLDER_MARKERS = ("待补充", "待刷新", "_尚未同步_")
+
+# New v2 file layout: per-domain files instead of the old
+# development/context/sources trio. `overview.md` stays because it's the
+# cold-start snapshot (goal/scope/stage/constraints) and has no good home in
+# the new four-category split.
 MANAGED_FILES = (
     "manifest.json",
     "overview.md",
-    "development.md",
-    "context.md",
-    "sources.md",
+    "decisions.md",
+    "progress.md",
+    "risks.md",
+    "glossary.md",
+    "unsorted.md",
+    "pending-promotion.md",
 )
+
+# Legacy v1 files are auto-migrated on first write/read then deleted. The list
+# is kept here so list_missing_docs() and other scanners can ignore them.
+LEGACY_V1_FILES = ("development.md", "context.md", "sources.md")
+
 FOCUS_PREFIXES = {"skills", "src", "apps", "packages", "services"}
 
 
@@ -166,12 +179,6 @@ def detect_repo_identity(repo_root):
 
 
 def detect_no_git_mode(cwd=None):
-    """Return True iff cwd is not inside any git repo AND has no first-level
-    git-repo subdirs (i.e. it's neither single-repo nor workspace mode).
-
-    The caller can then fall back to .dev-assets-id-based identity. Existing
-    git-aware behavior is unaffected.
-    """
     base = Path(cwd or ".").resolve()
     if not base.exists() or not base.is_dir():
         return False
@@ -184,12 +191,6 @@ def detect_no_git_mode(cwd=None):
 
 
 def read_or_create_dev_assets_id(cwd):
-    """Read `.dev-assets-id` from cwd; create with a fresh uuid when missing.
-
-    The file pins identity across directory moves/renames, which matters for
-    no-git mode where we can't lean on `git remote` for stability. Returns the
-    parsed payload (always contains "id").
-    """
     cwd_path = Path(cwd).resolve()
     id_file = cwd_path / DEV_ASSETS_ID_FILE
     if id_file.exists():
@@ -209,9 +210,6 @@ def read_or_create_dev_assets_id(cwd):
 
 
 def detect_repo_identity_no_git(cwd):
-    """Identity for non-git directories. Uses `.dev-assets-id` so the repo_key
-    survives moves/renames (a path-only hash would not).
-    """
     cwd_path = Path(cwd).resolve()
     payload = read_or_create_dev_assets_id(cwd_path)
     name = sanitize_repo_name(payload.get("name") or cwd_path.name)
@@ -224,10 +222,6 @@ def detect_repo_identity_no_git(cwd):
 
 
 def get_no_git_paths(cwd, context_dir=None):
-    """Resolve storage paths for no-git mode. Mirrors get_branch_paths()'s
-    return shape so callers can stay polymorphic. branch_name/branch_key are
-    None to signal degraded mode.
-    """
     cwd_path = Path(cwd).resolve()
     storage_root = (
         Path(context_dir).expanduser().resolve() if context_dir
@@ -239,20 +233,13 @@ def get_no_git_paths(cwd, context_dir=None):
     )
     identity = detect_repo_identity_no_git(cwd_path)
     repo_dir = storage_root / identity["repo_key"]
-    # In no-git mode "branch_dir" points at the repo-shared layer so the rest
-    # of the codebase keeps working without polymorphism explosions; readers
-    # that care will see branch_name=None and short-circuit.
+    # In no-git mode "branch_dir" collapses onto the repo-shared layer; the
+    # rest of the code stays polymorphic via branch_name=None.
     branch_dir = repo_dir / "repo"
     return cwd_path, None, None, storage_root, identity["repo_key"], repo_dir, branch_dir
 
 
 def _resolve_workspace_repo(repo):
-    """If `repo` points to a workspace root (cwd is not a git repo, but first-level
-    subdirs are), redirect to the primary repo via `DEV_ASSETS_PRIMARY_REPO` env.
-    Single-repo case returns `repo` unchanged. Raises in workspace mode when
-    primary is unset or does not match an existing subdir, so callers see a
-    clear error instead of git failing later.
-    """
     if not detect_workspace_mode(repo):
         return repo
     primary = os.environ.get("DEV_ASSETS_PRIMARY_REPO", "").strip()
@@ -273,9 +260,6 @@ def _resolve_workspace_repo(repo):
 
 
 def get_branch_paths(repo, context_dir=None, branch=None):
-    # no-git mode short-circuit: when cwd is neither a git repo nor a workspace,
-    # fall through to the dotfile-based identity resolver. branch info is None
-    # to signal callers that branch-specific files don't exist.
     if branch is None and detect_no_git_mode(repo):
         return get_no_git_paths(repo, context_dir)
     repo = _resolve_workspace_repo(repo)
@@ -290,10 +274,6 @@ def get_branch_paths(repo, context_dir=None, branch=None):
 
 
 def detect_workspace_mode(cwd=None):
-    """Return True iff cwd is not inside any git repo yet has first-level
-    subdirectories that are git repos. Purely additive — existing single-repo
-    behavior (cwd inside a git repo) returns False.
-    """
     base = Path(cwd or ".").resolve()
     if not base.exists() or not base.is_dir():
         return False
@@ -304,10 +284,6 @@ def detect_workspace_mode(cwd=None):
 
 
 def list_repos_in_workspace(cwd=None):
-    """First-level subdirectories of cwd that are git repos. Sorted by name.
-    Returns [] when cwd has none or isn't readable. `.git` may be a dir or a
-    file (worktree pointer); both count.
-    """
     base = Path(cwd or ".").resolve()
     repos = []
     try:
@@ -323,10 +299,6 @@ def list_repos_in_workspace(cwd=None):
 
 
 def get_all_branch_paths(cwd=None, context_dir=None):
-    """Batch variant of get_branch_paths() for every repo under a workspace cwd.
-    Repos with detached HEAD or other resolution errors are skipped silently.
-    Returns [] when not in workspace mode.
-    """
     result = []
     for repo_path in list_repos_in_workspace(cwd):
         try:
@@ -337,25 +309,34 @@ def get_all_branch_paths(cwd=None, context_dir=None):
 
 
 def asset_paths(repo_dir, branch_dir):
+    """Return a flat map of path keys for both repo and branch layers.
+
+    Key naming convention: branch-level keys are bare ("decisions",
+    "progress", ...). Repo-shared keys are prefixed with "repo_". The old v1
+    keys (development/context/sources) are gone — callers that still reference
+    them should be updated.
+    """
     repo_memory_dir = repo_dir / "repo"
     paths = {
         "repo_manifest": repo_memory_dir / "manifest.json",
         "repo_overview": repo_memory_dir / "overview.md",
-        "repo_context": repo_memory_dir / "context.md",
-        "repo_sources": repo_memory_dir / "sources.md",
+        "repo_decisions": repo_memory_dir / "decisions.md",
+        "repo_glossary": repo_memory_dir / "glossary.md",
         "repo_artifacts": repo_memory_dir / "artifacts",
     }
-    # no-git mode: branch_dir is the repo-shared layer itself. Point branch
-    # keys at the same files (overview/context/sources collapse onto repo-
-    # level), with development.md kept as a separate file under repo/ so it
-    # still has a place to live for "current progress" notes in non-git dirs.
+    # In no-git mode, branch_dir collapses onto repo_memory_dir. Progress/risks
+    # live inline at the repo layer since there's no branch concept; the other
+    # v2 files reuse the repo keys rather than duplicating.
     if branch_dir == repo_memory_dir:
         paths.update({
             "manifest": paths["repo_manifest"],
             "overview": paths["repo_overview"],
-            "development": repo_memory_dir / "development.md",
-            "context": paths["repo_context"],
-            "sources": paths["repo_sources"],
+            "decisions": paths["repo_decisions"],
+            "progress": repo_memory_dir / "progress.md",
+            "risks": repo_memory_dir / "risks.md",
+            "glossary": paths["repo_glossary"],
+            "unsorted": repo_memory_dir / "unsorted.md",
+            "pending_promotion": repo_memory_dir / "pending-promotion.md",
             "artifacts": paths["repo_artifacts"],
             "history": repo_memory_dir / "artifacts" / "history",
         })
@@ -363,9 +344,12 @@ def asset_paths(repo_dir, branch_dir):
     paths.update({
         "manifest": branch_dir / "manifest.json",
         "overview": branch_dir / "overview.md",
-        "development": branch_dir / "development.md",
-        "context": branch_dir / "context.md",
-        "sources": branch_dir / "sources.md",
+        "decisions": branch_dir / "decisions.md",
+        "progress": branch_dir / "progress.md",
+        "risks": branch_dir / "risks.md",
+        "glossary": branch_dir / "glossary.md",
+        "unsorted": branch_dir / "unsorted.md",
+        "pending_promotion": branch_dir / "pending-promotion.md",
         "artifacts": branch_dir / "artifacts",
         "history": branch_dir / "artifacts" / "history",
     })
@@ -396,6 +380,11 @@ def ensure_manifest(path, defaults):
     merged = dict(existing)
     merged.update(defaults)
     merged["initialized_at"] = existing.get("initialized_at", defaults["initialized_at"])
+    # Preserve setup_completed if already true — re-running init shouldn't
+    # reset user's setup progress.
+    if existing.get("setup_completed"):
+        merged["setup_completed"] = True
+        merged["setup_completed_at"] = existing.get("setup_completed_at") or merged.get("setup_completed_at")
     write_json(path, merged)
     return merged
 
@@ -421,6 +410,10 @@ def render_title_doc(doc_title, sections, intro=None):
     return "\n".join(parts).rstrip() + "\n"
 
 
+# ---------------------------------------------------------------------------
+# Templates (v2)
+# ---------------------------------------------------------------------------
+
 def template_overview(branch_name):
     return render_title_doc(
         "概览",
@@ -434,18 +427,27 @@ def template_overview(branch_name):
     )
 
 
-def template_development(branch_name):
+def template_decisions(branch_name):
     return render_title_doc(
-        "当前开发状态",
+        "分支决策",
+        [
+            ("分支", f"- {branch_name}"),
+            ("关键决策与原因", "- 待补充"),
+        ],
+    )
+
+
+def template_progress(branch_name):
+    return render_title_doc(
+        "当前进展",
         [
             ("分支", f"- {branch_name}"),
             ("建议优先查看的目录", "- 待刷新"),
             ("当前进展", "- 待补充"),
-            ("阻塞与注意点", "- 待补充"),
             ("下一步", "- 待补充"),
             (
                 "自动同步区",
-                "本区由 `dev-assets-context` 或 `dev-assets-sync` 刷新，请不要手工编辑。\n\n"
+                "本区由 `dev-assets-context` 或 `dev-assets-capture` 刷新，请不要手工编辑。\n\n"
                 f"{AUTO_START}\n"
                 "_尚未同步_\n"
                 f"{AUTO_END}",
@@ -454,39 +456,60 @@ def template_development(branch_name):
     )
 
 
-def template_context():
+def template_risks(branch_name):
     return render_title_doc(
-        "分支上下文",
+        "阻塞与注意点",
         [
-            ("当前有效上下文", "- 待补充"),
-            ("关键决策与原因", "- 待补充"),
+            ("分支", f"- {branch_name}"),
+            ("阻塞与注意点", "- 待补充"),
             ("后续继续前要注意", "- 待补充"),
         ],
     )
 
 
-def template_sources():
+def template_glossary(branch_name):
     return render_title_doc(
-        "分支源资料索引",
+        "术语与源资料",
         [
-            ("当前分支优先阅读", "- 待补充"),
-            (
-                "提交与代码历史",
-                "- 需要了解本分支改动时，优先使用 `git log --oneline <base>..HEAD`\n"
-                "- 需要查看某次提交细节时，使用 `git show <sha>`",
-            ),
+            ("分支", f"- {branch_name}"),
+            ("当前分支专有术语", "- 待补充"),
+            ("分支源资料入口", "- 待补充"),
         ],
     )
 
 
-def template_development_no_git(project_name):
+def template_unsorted():
+    return (
+        "# 未分类条目\n\n"
+        "本文件存放 heuristic 无法分类的内容，或用户手动甩进来尚未整理的内容。\n"
+        "下次 setup 或 capture --merge 时分类到 decisions/progress/risks/glossary。\n\n"
+        "## 待分类\n\n- 待补充\n"
+    )
+
+
+def template_pending_promotion():
+    return (
+        "# 候选跨分支条目\n\n"
+        "本文件由 capture 在检测到内容可能跨分支复用时自动打标写入。\n"
+        "graduate 时优先从此文件筛选提炼到 repo 共享层。\n\n"
+        "## 候选条目\n\n- 待补充\n"
+    )
+
+
+def template_progress_no_git(project_name):
     return render_title_doc(
-        "当前开发状态（no-git 模式）",
+        "当前进展（no-git 模式）",
         [
             ("项目", f"- {project_name}"),
             ("当前进展", "- 待补充"),
-            ("阻塞与注意点", "- 待补充"),
             ("下一步", "- 待补充"),
+            (
+                "自动同步区",
+                "本区由 capture / context 刷新。no-git 模式下无 git facts，保持最小骨架。\n\n"
+                f"{AUTO_START}\n"
+                "_尚未同步_\n"
+                f"{AUTO_END}",
+            ),
         ],
     )
 
@@ -502,34 +525,35 @@ def template_repo_overview(repo_name):
     )
 
 
-def template_repo_context():
+def template_repo_decisions(repo_name):
     return render_title_doc(
-        "仓库共享上下文",
+        "跨分支通用决策",
         [
-            ("长期有效背景", "- 待补充"),
+            ("仓库", f"- {repo_name}"),
             ("跨分支通用决策", "- 待补充"),
+        ],
+    )
+
+
+def template_repo_glossary(repo_name):
+    return render_title_doc(
+        "仓库共享术语与入口",
+        [
+            ("仓库", f"- {repo_name}"),
+            ("长期有效背景", "- 待补充"),
+            ("共享入口", "- 待补充"),
             ("共享注意点", "- 待补充"),
         ],
     )
 
 
-def template_repo_sources():
-    return render_title_doc(
-        "仓库共享源资料索引",
-        [
-            ("共享入口", "- 待补充"),
-            (
-                "Git 导航",
-                "- 查看默认基线与提交历史时，优先使用 `git log --oneline <base>..HEAD`\n"
-                "- 查看具体提交细节时，使用 `git show <sha>`",
-            ),
-        ],
-    )
-
+# ---------------------------------------------------------------------------
+# Manifest builders
+# ---------------------------------------------------------------------------
 
 def build_repo_manifest(repo_root, storage_root, repo_key, identity, *, no_git=False):
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "scope": "repo",
         "storage_mode": "user-home-no-git" if no_git else "user-home-repo-plus-branch",
         "repo_root": str(repo_root),
@@ -550,7 +574,7 @@ def build_repo_manifest(repo_root, storage_root, repo_key, identity, *, no_git=F
 
 def build_branch_manifest(repo_root, branch_name, branch_key, storage_root, repo_key):
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "scope": "branch",
         "storage_mode": "user-home-repo-plus-branch",
         "repo_root": str(repo_root),
@@ -564,10 +588,33 @@ def build_branch_manifest(repo_root, branch_name, branch_key, storage_root, repo
         "default_base": None,
         "scope_summary": [],
         "focus_areas": [],
+        # v2 additions: setup_completed flips to true when user runs setup
+        # merge-unsorted flow. Lazy-init writes proceed with false.
+        "setup_completed": False,
+        "setup_completed_at": None,
     }
 
 
+def get_setup_completed(manifest_path):
+    manifest = read_json(manifest_path)
+    return bool(manifest.get("setup_completed"))
+
+
+def mark_setup_completed(manifest_path):
+    manifest = read_json(manifest_path)
+    manifest["setup_completed"] = True
+    manifest["setup_completed_at"] = now_iso()
+    manifest["updated_at"] = now_iso()
+    write_json(manifest_path, manifest)
+    return manifest
+
+
+# ---------------------------------------------------------------------------
+# Migration: v0 (in-repo .dev-assets/) and v1 (overview/development/context/sources)
+# ---------------------------------------------------------------------------
+
 def migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir):
+    """v0 → v1: pull old in-repo `.dev-assets/<branch>/` into user-home storage."""
     legacy_context_dir = get_legacy_context_dir(repo_root)
     if Path(legacy_context_dir).expanduser().is_absolute():
         legacy_root = Path(legacy_context_dir).expanduser().resolve()
@@ -580,7 +627,8 @@ def migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir)
 
     branch_dir.mkdir(parents=True, exist_ok=True)
     migrated = []
-    for file_name in MANAGED_FILES:
+    # Only copy v1-era file names (development/context/sources/overview/manifest).
+    for file_name in ("manifest.json", "overview.md", "development.md", "context.md", "sources.md"):
         source = legacy_branch_dir / file_name
         target = branch_dir / file_name
         if source.exists() and not target.exists():
@@ -596,7 +644,208 @@ def migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir)
     return {"legacy_branch_dir": str(legacy_branch_dir), "migrated": migrated} if migrated else None
 
 
+# v1 → v2 section routing: old section title → (target v2 file key, optional new section title)
+# None as new_title means "keep original title".
+_V1_BRANCH_SECTION_MAP = {
+    # from development.md
+    "建议优先查看的目录": ("progress", None),
+    "当前进展": ("progress", None),
+    "下一步": ("progress", None),
+    "阻塞与注意点": ("risks", None),
+    # "自动同步区" is handled specially (copied into progress.md as-is).
+    # from context.md
+    "当前有效上下文": ("glossary", "当前有效上下文"),
+    "关键决策与原因": ("decisions", "关键决策与原因"),
+    "后续继续前要注意": ("risks", "后续继续前要注意"),
+    # from sources.md
+    "当前分支优先阅读": ("glossary", "分支源资料入口"),
+    "提交与代码历史": ("glossary", "提交与代码历史参考"),
+    # "分支" section is header metadata, skip.
+}
+
+_V1_REPO_SECTION_MAP = {
+    # from repo/context.md
+    "长期有效背景": ("repo_glossary", "长期有效背景"),
+    "跨分支通用决策": ("repo_decisions", "跨分支通用决策"),
+    "共享注意点": ("repo_glossary", "共享注意点"),
+    # from repo/sources.md
+    "共享入口": ("repo_glossary", "共享入口"),
+    # "仓库" section is header metadata, skip.
+}
+
+
+def _collect_v1_sections(path, section_map):
+    """Read a v1 markdown file and bucket its sections by target v2 key.
+    Returns {v2_key: [(title, body), ...]}.
+    """
+    if not path.exists():
+        return {}
+    buckets = {}
+    _, sections = split_sections(path.read_text(encoding="utf-8"))
+    for title, body in sections:
+        t = title.strip()
+        if t == "分支" or t == "仓库":
+            continue
+        mapping = section_map.get(t)
+        if not mapping:
+            # Unknown section from legacy — drop into unsorted for branch
+            # layer, or glossary for repo (conservative default).
+            continue
+        target_key, new_title = mapping
+        new_title = new_title or t
+        buckets.setdefault(target_key, []).append((new_title, body))
+    return buckets
+
+
+def _extract_auto_block(path):
+    """Return the content between AUTO_START/AUTO_END markers, or None."""
+    if not path.exists():
+        return None
+    content = path.read_text(encoding="utf-8")
+    if AUTO_START not in content or AUTO_END not in content:
+        return None
+    _, after_start = content.split(AUTO_START, 1)
+    block, _ = after_start.split(AUTO_END, 1)
+    return block.strip()
+
+
+def _write_v2_file_from_buckets(target_path, doc_title, header_field, buckets, fallback_body="- 待补充"):
+    """Render the v2 target file from migrated section buckets + a header."""
+    sections = [header_field]
+    if buckets:
+        sections.extend(buckets)
+    else:
+        # No migrated content — let initialize_assets seed the placeholder
+        # template instead of writing an empty file here.
+        return False
+    target_path.write_text(render_title_doc(doc_title, sections), encoding="utf-8")
+    return True
+
+
+def migrate_v1_to_v2_branch(branch_dir, branch_name):
+    """v1 → v2: split old development/context/sources into new four-file
+    structure plus unsorted/pending-promotion bootstrap. Old files are deleted
+    after successful migration (single-user offline cleanup — no .legacy kept).
+    Idempotent: returns None if no v1 files are present.
+    """
+    old_dev = branch_dir / "development.md"
+    old_ctx = branch_dir / "context.md"
+    old_src = branch_dir / "sources.md"
+
+    if not any(p.exists() for p in (old_dev, old_ctx, old_src)):
+        return None
+
+    # Collect sections from all v1 files, bucketed by v2 target key.
+    merged_buckets = {}
+    for v1_path in (old_dev, old_ctx, old_src):
+        buckets = _collect_v1_sections(v1_path, _V1_BRANCH_SECTION_MAP)
+        for k, entries in buckets.items():
+            merged_buckets.setdefault(k, []).extend(entries)
+
+    # Preserve the development.md auto-sync block as-is inside progress.md.
+    auto_block = _extract_auto_block(old_dev)
+
+    # Write v2 files if there's content; skip if bucket is empty so init's
+    # placeholder template seeds the file instead.
+    header = ("分支", f"- {branch_name}")
+    written = []
+
+    progress_sections = list(merged_buckets.get("progress", []))
+    if auto_block is not None:
+        progress_sections.append((
+            "自动同步区",
+            "本区由 `dev-assets-context` 或 `dev-assets-capture` 刷新，请不要手工编辑。\n\n"
+            f"{AUTO_START}\n{auto_block}\n{AUTO_END}",
+        ))
+    if progress_sections:
+        target = branch_dir / "progress.md"
+        target.write_text(
+            render_title_doc("当前进展", [header] + progress_sections),
+            encoding="utf-8",
+        )
+        written.append("progress.md")
+
+    for key, doc_title in (
+        ("decisions", "分支决策"),
+        ("risks", "阻塞与注意点"),
+        ("glossary", "术语与源资料"),
+    ):
+        entries = merged_buckets.get(key)
+        if not entries:
+            continue
+        target = branch_dir / f"{key}.md"
+        target.write_text(
+            render_title_doc(doc_title, [header] + entries),
+            encoding="utf-8",
+        )
+        written.append(f"{key}.md")
+
+    # Delete old v1 files after successful migration.
+    removed = []
+    for p in (old_dev, old_ctx, old_src):
+        if p.exists():
+            p.unlink()
+            removed.append(p.name)
+
+    return {"migrated_files": written, "removed_legacy": removed}
+
+
+def migrate_v1_to_v2_repo(repo_memory_dir, repo_name):
+    """v1 → v2 for repo-shared layer: old repo/context.md + repo/sources.md
+    are split into repo/decisions.md + repo/glossary.md. repo/overview.md
+    stays put. Idempotent.
+    """
+    old_ctx = repo_memory_dir / "context.md"
+    old_src = repo_memory_dir / "sources.md"
+
+    if not any(p.exists() for p in (old_ctx, old_src)):
+        return None
+
+    merged_buckets = {}
+    for v1_path in (old_ctx, old_src):
+        buckets = _collect_v1_sections(v1_path, _V1_REPO_SECTION_MAP)
+        for k, entries in buckets.items():
+            merged_buckets.setdefault(k, []).extend(entries)
+
+    header = ("仓库", f"- {repo_name}")
+    written = []
+
+    for key, doc_title, file_name in (
+        ("repo_decisions", "跨分支通用决策", "decisions.md"),
+        ("repo_glossary", "仓库共享术语与入口", "glossary.md"),
+    ):
+        entries = merged_buckets.get(key)
+        if not entries:
+            continue
+        target = repo_memory_dir / file_name
+        target.write_text(
+            render_title_doc(doc_title, [header] + entries),
+            encoding="utf-8",
+        )
+        written.append(file_name)
+
+    removed = []
+    for p in (old_ctx, old_src):
+        if p.exists():
+            p.unlink()
+            removed.append(p.name)
+
+    return {"migrated_files": written, "removed_legacy": removed}
+
+
+# ---------------------------------------------------------------------------
+# Initialize assets (lazy init entrypoint)
+# ---------------------------------------------------------------------------
+
 def initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir):
+    """Create the repo-shared layer + current branch layer on disk, seeding
+    each v2 file with a placeholder template. Idempotent — safe to call on
+    every write.
+
+    Runs v0→v1 legacy migration (in-repo .dev-assets/ dir) then v1→v2
+    migration (old 3-file layout) before seeding, so existing content is never
+    clobbered.
+    """
     repo_memory_dir = repo_dir / "repo"
     repo_memory_dir.mkdir(parents=True, exist_ok=True)
     no_git = branch_name is None and branch_dir == repo_memory_dir
@@ -608,39 +857,141 @@ def initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key
         identity = detect_repo_identity_no_git(repo_root)
     else:
         identity = detect_repo_identity(repo_root)
-    migration = None if no_git else migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir)
+
+    # v0 → v1 first (copies old in-repo files into branch_dir with v1 names)
+    v0_migration = None if no_git else migrate_legacy_branch_assets(repo_root, branch_name, branch_key, branch_dir)
+    # v1 → v2 next (splits old files into v2 four-file structure)
+    v1_branch_migration = None if no_git else migrate_v1_to_v2_branch(branch_dir, branch_name)
+    v1_repo_migration = migrate_v1_to_v2_repo(repo_memory_dir, repo_root.name)
+
     paths = asset_paths(repo_dir, branch_dir)
     paths["repo_artifacts"].mkdir(exist_ok=True)
     if not no_git:
         paths["artifacts"].mkdir(exist_ok=True)
         paths["history"].mkdir(parents=True, exist_ok=True)
 
+    # Repo-shared layer seeding.
     ensure_manifest(paths["repo_manifest"], build_repo_manifest(repo_root, storage_root, repo_key, identity, no_git=no_git))
     ensure_file(paths["repo_overview"], template_repo_overview(repo_root.name))
-    ensure_file(paths["repo_context"], template_repo_context())
-    ensure_file(paths["repo_sources"], template_repo_sources())
+    ensure_file(paths["repo_decisions"], template_repo_decisions(repo_root.name))
+    ensure_file(paths["repo_glossary"], template_repo_glossary(repo_root.name))
 
     if no_git:
-        # In no-git mode "branch" files alias onto repo-shared files; only
-        # development.md is its own thing so we seed it with a degraded
-        # template that doesn't mention a branch name.
-        ensure_file(paths["development"], template_development_no_git(repo_root.name))
+        # In no-git mode, progress/risks/unsorted/pending live at the repo
+        # layer since there's no branch. Seed them with degraded templates.
+        ensure_file(paths["progress"], template_progress_no_git(repo_root.name))
+        ensure_file(paths["risks"], template_risks(repo_root.name))
+        ensure_file(paths["unsorted"], template_unsorted())
+        ensure_file(paths["pending_promotion"], template_pending_promotion())
         return paths
 
+    # Branch layer seeding.
     ensure_manifest(paths["manifest"], build_branch_manifest(repo_root, branch_name, branch_key, storage_root, repo_key))
     ensure_file(paths["overview"], template_overview(branch_name))
-    ensure_file(paths["development"], template_development(branch_name))
-    ensure_file(paths["context"], template_context())
-    ensure_file(paths["sources"], template_sources())
+    ensure_file(paths["decisions"], template_decisions(branch_name))
+    ensure_file(paths["progress"], template_progress(branch_name))
+    ensure_file(paths["risks"], template_risks(branch_name))
+    ensure_file(paths["glossary"], template_glossary(branch_name))
+    ensure_file(paths["unsorted"], template_unsorted())
+    ensure_file(paths["pending_promotion"], template_pending_promotion())
 
-    if migration:
+    # Stamp migration info onto the branch manifest so graduate/context can
+    # surface it when relevant.
+    any_migration = v0_migration or v1_branch_migration or v1_repo_migration
+    if any_migration:
         branch_manifest = read_json(paths["manifest"])
-        branch_manifest["legacy_migration"] = migration
+        note = {}
+        if v0_migration:
+            note["legacy_v0"] = v0_migration
+        if v1_branch_migration:
+            note["legacy_v1_branch"] = v1_branch_migration
+        if v1_repo_migration:
+            note["legacy_v1_repo"] = v1_repo_migration
+        branch_manifest["legacy_migration"] = note
         branch_manifest["updated_at"] = now_iso()
         write_json(paths["manifest"], branch_manifest)
 
     return paths
 
+
+def ensure_branch_paths_exist(repo, context_dir=None, branch=None):
+    """Lazy-init entrypoint. Returns the same tuple as get_branch_paths() plus
+    a `paths` dict, creating the directory + v2 file skeleton if missing.
+
+    This is the thing capture/context should call instead of raising on
+    missing branch_dir — the whole point of the v2 design is that writes never
+    require prior setup.
+    """
+    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir = get_branch_paths(
+        repo, context_dir, branch
+    )
+    if not branch_dir.exists():
+        initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir)
+    else:
+        # Branch dir exists but may be v1 — run the migration silently.
+        migrate_v1_to_v2_branch(branch_dir, branch_name or repo_root.name)
+        migrate_v1_to_v2_repo(repo_dir / "repo", repo_root.name)
+        # And make sure v2 skeleton files exist (adds missing ones without
+        # clobbering existing content).
+        initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir)
+    paths = asset_paths(repo_dir, branch_dir)
+    return repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths
+
+
+# ---------------------------------------------------------------------------
+# Heuristic classifier (capture routing)
+# ---------------------------------------------------------------------------
+
+# Order matters: the first pattern that matches wins. Keep decisions/risks
+# ahead of progress since their signals are more specific.
+_CLASSIFY_PATTERNS = [
+    ("decision", re.compile(r"结论[:：]|决[定议][:：]|不再|改为|采用|废弃|选择.+?不选|abandoned|adopt")),
+    ("risk", re.compile(r"阻塞|注意|坑|失败|风险|卡住|gotcha|caveat|warning")),
+    ("glossary", re.compile(r"即[:：]|\s即\s|指的是|对应|链接|https?://|api\s*=|缩写|术语|简称|别名")),
+    ("progress", re.compile(r"当前|已完成|下一步|commit|提交|实现|进展|todo|wip")),
+]
+
+
+def classify_content(text, *, already_setup=False):
+    """Classify free-form content into one of decisions/progress/risks/
+    glossary/unsorted. Used by capture when the caller doesn't pass --kind.
+
+    Before setup, ambiguous content falls to `unsorted` so the user can sort
+    it later via setup merge. After setup, the default shifts to `progress`
+    because the user has signaled they want aggressive categorization.
+    """
+    if not text or not text.strip():
+        return "unsorted"
+    for label, pattern in _CLASSIFY_PATTERNS:
+        if pattern.search(text):
+            return label
+    return "progress" if already_setup else "unsorted"
+
+
+def is_cross_branch_candidate(text, branch_name):
+    """Heuristic: return True if content looks reusable across branches.
+
+    Conservative — returns True only when:
+      - content doesn't mention branch-specific terms, AND
+      - content has lesson-learned signals (经验/模式/最佳实践/教训/gotcha/pattern).
+
+    Cross-branch candidates are copied into pending-promotion.md in addition
+    to their primary target file. graduate then only scans pending-promotion
+    instead of every branch file.
+    """
+    if not text or not branch_name:
+        return False
+    lowered = text.lower()
+    # If any non-trivial branch token appears verbatim, treat as branch-local.
+    for token in branch_name.lower().replace("/", " ").replace("_", " ").replace("-", " ").split():
+        if len(token) >= 4 and token in lowered:
+            return False
+    return bool(re.search(r"经验|模式|最佳实践|教训|通用|复用|gotcha|pattern|lesson", text, re.I))
+
+
+# ---------------------------------------------------------------------------
+# Git-derived facts and auto-block rendering
+# ---------------------------------------------------------------------------
 
 def detect_default_base(repo_root):
     symbolic = run_git(["symbolic-ref", "refs/remotes/origin/HEAD"], cwd=repo_root, check=False)
@@ -735,7 +1086,11 @@ def build_auto_block(facts):
     )
 
 
-def ensure_development_auto_block(path):
+def ensure_progress_auto_block(path):
+    """Idempotently ensure progress.md has the auto-sync marker pair. Called
+    before any auto-block replace/sync so freshly created files (or hand-
+    edited ones that lost the markers) stay writable by sync_progress().
+    """
     content = path.read_text(encoding="utf-8")
     if AUTO_START in content and AUTO_END in content:
         return content
@@ -743,7 +1098,7 @@ def ensure_development_auto_block(path):
     marker = "## 自动同步区"
     auto_section = (
         f"\n\n{marker}\n\n"
-        "本区由 `dev-assets-context` 或 `dev-assets-sync` 刷新，请不要手工编辑。\n\n"
+        "本区由 `dev-assets-context` 或 `dev-assets-capture` 刷新，请不要手工编辑。\n\n"
         f"{AUTO_START}\n"
         "_尚未同步_\n"
         f"{AUTO_END}\n"
@@ -761,11 +1116,15 @@ def ensure_development_auto_block(path):
 
 def replace_auto_block(content, replacement):
     if AUTO_START not in content or AUTO_END not in content:
-        raise RuntimeError("development.md is missing auto-generated markers")
+        raise RuntimeError("progress.md is missing auto-generated markers")
     before, remainder = content.split(AUTO_START, 1)
     _, after = remainder.split(AUTO_END, 1)
     return f"{before}{AUTO_START}\n{replacement.rstrip()}\n{AUTO_END}{after}"
 
+
+# ---------------------------------------------------------------------------
+# Section-level markdown editing
+# ---------------------------------------------------------------------------
 
 def split_sections(content):
     positions = list(re.finditer(r"^## (.+?)\n", content, re.M))
@@ -803,7 +1162,7 @@ def upsert_markdown_section(path, title, body):
             if not replaced:
                 updated.append((title, body))
                 replaced = True
-            # 同 title 的多余 section 直接丢弃，顺带根治已有的重复污染。
+            # drop duplicates if any.
         else:
             updated.append((existing_title, existing_body))
     if not replaced:
@@ -812,10 +1171,6 @@ def upsert_markdown_section(path, title, body):
 
 
 def _section_is_placeholder_only(text):
-    """True iff every non-empty line is a placeholder marker. Used by append
-    so a section freshly created from a template ("- 待补充") gets replaced
-    by the first real entry instead of accumulating "- 待补充" + content.
-    """
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return True
@@ -823,15 +1178,6 @@ def _section_is_placeholder_only(text):
 
 
 def append_to_section(path, title, body):
-    """Append body to the end of a markdown section, creating the section if
-    missing. Used by graduate's append-mode harvest so multi-entry harvests
-    don't clobber each other (unlike upsert which always replaces).
-
-    If the existing section body is only placeholder markers (e.g. "- 待补充"
-    from the initial template), the placeholder is dropped and the new body
-    becomes the section content — accumulating "- 待补充" alongside real
-    entries reads as a stale doc.
-    """
     content = path.read_text(encoding="utf-8") if path.exists() else ""
     prefix, sections = split_sections(content)
     target = title.strip()
@@ -852,11 +1198,15 @@ def append_to_section(path, title, body):
     path.write_text(join_sections(prefix, updated), encoding="utf-8")
 
 
-def upsert_development_section(path, title, body):
-    content = ensure_development_auto_block(path)
+def upsert_progress_section(path, title, body):
+    """upsert a section into progress.md while preserving the auto-sync block
+    at the end of the file. Any non-auto-sync sections before the marker get
+    normal upsert semantics.
+    """
+    content = ensure_progress_auto_block(path)
     marker = "## 自动同步区"
     if marker not in content:
-        raise RuntimeError("development.md is missing the auto-sync section heading")
+        raise RuntimeError("progress.md is missing the auto-sync section heading")
     before, after = content.split(marker, 1)
     prefix, sections = split_sections(before.rstrip())
     target = title.strip()
@@ -875,28 +1225,34 @@ def upsert_development_section(path, title, body):
     path.write_text(rewritten, encoding="utf-8")
 
 
-def sync_development(paths, facts):
-    upsert_development_section(
-        paths["development"],
+def sync_progress(paths, facts):
+    """Refresh progress.md — writes both the human-readable focus section and
+    the auto-sync block. Called by capture's `sync-working-tree` subcommand
+    and by context's `sync`.
+    """
+    upsert_progress_section(
+        paths["progress"],
         "建议优先查看的目录",
         render_bullets(facts["focus_areas"], empty_text="- 当前未检测到改动目录", wrap_code=True),
     )
-    current = ensure_development_auto_block(paths["development"])
+    current = ensure_progress_auto_block(paths["progress"])
     updated = replace_auto_block(current, build_auto_block(facts))
-    paths["development"].write_text(updated, encoding="utf-8")
+    paths["progress"].write_text(updated, encoding="utf-8")
 
+
+# ---------------------------------------------------------------------------
+# Archive (graduate)
+# ---------------------------------------------------------------------------
 
 ARCHIVE_DIR_NAME = "_archived"
 ARCHIVE_INDEX_NAME = "INDEX.md"
 
 
 def archive_root_dir(repo_dir):
-    """Where archived branches go: <repo_dir>/branches/_archived/."""
     return repo_dir / "branches" / ARCHIVE_DIR_NAME
 
 
 def build_archive_summary(branch_manifest, git_log_lines, harvest_notes=None):
-    """Produce the markdown content for archive_summary.md."""
     parts = ["# 归档快照", ""]
     if harvest_notes:
         parts.extend(["## Harvest 备注", "", harvest_notes.strip(), ""])
@@ -907,7 +1263,7 @@ def build_archive_summary(branch_manifest, git_log_lines, harvest_notes=None):
         f"- 分支: {branch_manifest.get('branch', '<unknown>')}",
         f"- 最终 HEAD: {branch_manifest.get('last_seen_head') or '<unknown>'}",
         f"- 默认基线: {branch_manifest.get('default_base') or '<unknown>'}",
-        f"- 最近 sync 标题: {branch_manifest.get('last_session_sync_title') or '<none>'}",
+        f"- 最近 capture 标题: {branch_manifest.get('last_session_sync_title') or '<none>'}",
         "",
     ])
     if git_log_lines:
@@ -921,10 +1277,6 @@ def build_archive_summary(branch_manifest, git_log_lines, harvest_notes=None):
 
 
 def archive_branch_dir(branch_dir, archive_dst):
-    """Move branch_dir to archive_dst. Caller decides the destination name
-    (typically `<branch_key>__<YYYYMMDD>`). Raises if dst already exists, so
-    same-day double-archive doesn't silently merge directories.
-    """
     archive_dst.parent.mkdir(parents=True, exist_ok=True)
     if archive_dst.exists():
         raise RuntimeError(f"archive destination already exists: {archive_dst}")
@@ -932,11 +1284,6 @@ def archive_branch_dir(branch_dir, archive_dst):
 
 
 def append_archive_index(index_path, line):
-    """Append a one-line entry to the archive INDEX.md (created if missing).
-
-    The header is preserved across appends; entries are kept in chronological
-    insertion order so an `ls`-like read gives a usable history at a glance.
-    """
     if not index_path.exists():
         index_path.write_text(
             "# 归档分支索引\n\n按归档时间倒序追加。每条记录格式：\n\n"
@@ -947,10 +1294,18 @@ def append_archive_index(index_path, line):
         fh.write(line.rstrip() + "\n")
 
 
+# ---------------------------------------------------------------------------
+# Health / metadata helpers
+# ---------------------------------------------------------------------------
+
 def list_missing_docs(paths):
+    """Return keys whose file is missing or still contains placeholder text.
+    Skips manifest/artifacts/history and legacy files (handled elsewhere).
+    """
     missing = []
+    skip_keys = {"manifest", "repo_manifest", "artifacts", "history", "repo_artifacts"}
     for key, path in paths.items():
-        if key in {"manifest", "repo_manifest", "artifacts", "history", "repo_artifacts"}:
+        if key in skip_keys:
             continue
         if not path.exists():
             missing.append(key)

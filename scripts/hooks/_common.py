@@ -27,7 +27,9 @@ from dev_asset_common import (
 
 
 CONTEXT_SCRIPT = PACKAGE_ROOT / "skills" / "dev-assets-context" / "scripts" / "dev_asset_context.py"
-SYNC_SCRIPT = PACKAGE_ROOT / "skills" / "dev-assets-sync" / "scripts" / "dev_asset_sync.py"
+# v2: sync/update merged into capture. All auto-block refresh and
+# record-head calls now go through the capture script.
+CAPTURE_SCRIPT = PACKAGE_ROOT / "skills" / "dev-assets-capture" / "scripts" / "dev_asset_capture.py"
 
 
 def run_python(script_path, *args, cwd=None):
@@ -129,13 +131,13 @@ def sync_context_for(repo_root):
 
 def sync_working_tree_for(repo_root):
     return json.loads(
-        run_python(SYNC_SCRIPT, "sync-working-tree", "--repo", str(repo_root), cwd=str(repo_root))
+        run_python(CAPTURE_SCRIPT, "sync-working-tree", "--repo", str(repo_root), cwd=str(repo_root))
     )
 
 
 def record_head_for(repo_root):
     return json.loads(
-        run_python(SYNC_SCRIPT, "record-head", "--repo", str(repo_root), cwd=str(repo_root))
+        run_python(CAPTURE_SCRIPT, "record-head", "--repo", str(repo_root), cwd=str(repo_root))
     )
 
 
@@ -151,28 +153,32 @@ def maybe_record_head():
     return record_head_for(REPO_ROOT)
 
 
+# v2 section map: branch files split by domain. progress.md carries
+# "建议优先查看的目录", "当前进展", "下一步"; risks.md carries "阻塞与注意点" and
+# "后续继续前要注意"; decisions.md carries "关键决策与原因"; glossary.md carries
+# "当前有效上下文".
 _FULL_SECTION_KEYS = (
     ("overview", "当前目标"),
     ("overview", "范围边界"),
     ("overview", "当前阶段"),
     ("overview", "关键约束"),
-    ("development", "建议优先查看的目录"),
-    ("development", "当前进展"),
-    ("development", "阻塞与注意点"),
-    ("development", "下一步"),
-    ("context", "当前有效上下文"),
-    ("context", "关键决策与原因"),
-    ("context", "后续继续前要注意"),
+    ("progress", "建议优先查看的目录"),
+    ("progress", "当前进展"),
+    ("risks", "阻塞与注意点"),
+    ("progress", "下一步"),
+    ("glossary", "当前有效上下文"),
+    ("decisions", "关键决策与原因"),
+    ("risks", "后续继续前要注意"),
     ("repo_overview", "长期目标与边界"),
     ("repo_overview", "仓库级关键约束"),
-    ("repo_sources", "共享入口"),
+    ("repo_glossary", "共享入口"),
 )
 
 _BRIEF_SECTION_KEYS = (
     ("overview", "当前目标"),
     ("overview", "当前阶段"),
-    ("development", "当前进展"),
-    ("development", "下一步"),
+    ("progress", "当前进展"),
+    ("progress", "下一步"),
 )
 
 
@@ -186,10 +192,13 @@ def _extract_sections(paths, keys):
 
 def _build_context_from_assets(assets, *, full=True, heading=None):
     if not assets["branch_dir"].exists():
+        # v2: capture lazy-inits on first write, so branch_dir typically
+        # exists after any real interaction. Missing here just means no
+        # write has happened yet — no need to push setup.
         if heading is None:
             return (
-                "当前仓库尚未初始化 dev-assets 分支记忆。\n"
-                "如果这是需要跨会话继续的开发线，请先使用 `dev-assets-setup` 建立 repo+branch 存储。"
+                "当前仓库+分支还没有 dev-assets 记忆。"
+                "下一次 `dev-assets-capture` 写入时会自动 lazy init；现有结论若值得记一笔，直接走 capture。"
             )
         return None
 

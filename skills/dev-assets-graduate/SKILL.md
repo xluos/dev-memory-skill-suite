@@ -1,117 +1,121 @@
 ---
 name: dev-assets-graduate
-description: Use when the user explicitly indicates a branch's work is done and should be wrapped up — e.g. "归档"、"分支收尾"、"需求做完了"、"merge 完了清一下"、"这个分支可以归档了"、"把分支知识沉淀一下". This skill harvests cross-branch reusable knowledge from branch memory into the repo-shared layer (after stripping business-specific names), then archives the branch directory under `branches/_archived/`. Do not trigger implicitly — destructive moves require explicit user intent. In no-git working directories this skill refuses, since there are no branches to graduate.
+description: 当用户显式说分支结束工作需要归档、收尾、沉淀时使用 —— 触发词："归档"、"分支收尾"、"需求做完了"、"merge 完了清一下"、"这个分支可以归档了"、"把分支知识沉淀一下"。本 skill 从分支记忆里提炼跨分支可复用知识到 repo 共享层，然后归档分支目录到 `branches/_archived/`。v2 优先扫 `pending-promotion.md`（capture 自动标记的跨分支候选），大幅缩小人工审核面。destructive move 必须显式用户触发，不 implicit。非 git 项目无分支概念，本 skill 直接拒绝。
 ---
 
 # Dev Assets Graduate
 
 把已完成分支的开发记忆做"毕业"处理：
 
-1. **提炼上提**：从 branch 记忆里挑出跨分支可复用的知识（剥离业务名词），写到 repo 共享层
+1. **提炼上提**：从分支记忆里挑出跨分支可复用的知识（剥离业务名词），写到 repo 共享层
 2. **归档**：把 branch 目录搬到 `branches/_archived/<branch>__<date>/`，append `INDEX.md`
 
-这是显式用户动作，不要 implicit 触发——destructive move 需要用户授权。
+这是显式用户动作，不要 implicit 触发 —— destructive move 需要用户授权。
 
-**Announce at start:** 用一句简短的话说明将先 dump 当前 branch+repo 内容做对比，再让用户确认上提哪些条目。
+**Announce at start:** 用一句简短的话说明将先 dump 当前 branch+repo 内容（优先看 pending-promotion），再让用户确认上提哪些条目。
+
+## DO / DON'T
+
+**Do:**
+
+- 用户明确说"归档"、"分支收尾"、"需求做完了"、"merge 完了清一下"、"这个分支可以归档了"、"把分支知识沉淀一下"
+- 用户刚合完 PR 到 main 并明确要清理分支记忆
+
+**Don't:**
+
+- **永远不要 implicit 触发**。destructive 操作必须显式确认
+- no-git 模式（无分支概念）
+- 当前分支还在开发中，用户只是顺口提到"以后要归档"
+
+## v2 改造：优先扫 pending-promotion
+
+v1 graduate 要全量审核 branch 目录里所有 markdown。v2 里 capture 在写入时已经用 `is_cross_branch_candidate()` 自动打标 `pending-promotion.md`，graduate 的 dry-run 会：
+
+- **primary_sources**（主审核面）：`pending-promotion.md` + `decisions.md`
+- **cross_check_sources**（漏网之鱼检查）：progress / risks / glossary / overview
+
+通常只看 primary_sources 就够。cross_check_sources 用来补抓 capture heuristic 漏判的跨分支经验。
 
 ## Workflow
 
 ### Step 1: Pre-flight check
 
-确认这是真的"分支收尾"：
-
-- 当前 branch 已经初始化（`branch_dir` 存在）
-- 用户语义上是 "结束这一轮工作"——不是 "checkpoint"（那走 dev-assets-sync）也不是 "改一段错的记忆"（那走 dev-assets-update）
-- 如果 git ahead `origin/master..HEAD` 还非空，提示用户："有 N 个 commit 尚未合并，仍要归档吗？"
-- 如果是 no-git 模式，直接拒绝
-
-### Step 2: Dry-run harvest
-
-跑：
-
 ```bash
-python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py dry-run --repo <repo-path>
+python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py dry-run \
+  [--repo <repo-path>] [--branch <branch-name>]
 ```
 
-脚本输出当前 branch 三份文件（`development.md` / `context.md` / `sources.md`）的所有 section 和 repo 共享层三份文件的对应 section，**完整内容**，方便你做对比判断。
+输出：
+- `git_status.ahead`：当前分支领先 default_base 的 commit 数。如果 >0，用户多半还没 merge — 提示确认
+- `git_status.uncommitted`：true 表示工作区还有未提交改动，提示先 commit/stash
+- `primary_sources.pending-promotion.md`：capture 自动标记的跨分支候选（主审核）
+- `primary_sources.decisions.md`：稳定决策，通常也值得提升
+- `cross_check_sources.*`：其他文件，只做漏网检查
+- `archive_destination`：分支目录会搬到哪
 
-### Step 3: Decide what to harvest
+### Step 2: 生成 harvest.json
 
-按下表把 branch section 上提到 repo section（**剥离当前业务相关命名**）：
+```json
+{
+  "repo_overview": [
+    {"section": "长期目标与边界", "body": "...", "mode": "append"}
+  ],
+  "repo_decisions": [
+    {"section": "跨分支通用决策", "body": "...", "mode": "append"}
+  ],
+  "repo_glossary": [
+    {"section": "长期有效背景", "body": "...", "mode": "append"},
+    {"section": "共享入口", "body": "...", "mode": "append"}
+  ],
+  "notes": "从 xxx 分支提炼",
+  "archive": true
+}
+```
 
-| branch 来源 | repo 目标 | 上提原则 |
-|---|---|---|
-| `context.md` 「关键决策与原因」 | `context.md` 「跨分支通用决策」 | 去掉具体 RPC、字段、业务名；保留约定、规则、原理 |
-| `sources.md` 「当前分支优先阅读」中**通用**条目 | `sources.md` 「共享入口」 | 必须是跨分支可复用的文档/链接 |
-| `context.md` 「后续继续前要注意」 | `context.md` 「共享注意点」 | 仅挑反复可能复用的工程约定 |
-| `development.md` 「阻塞与注意点」 | 视情况 → repo 「共享注意点」 或丢弃 | 只挑跨分支会再次遇到的，**不**上提具体业务卡点 |
+**提炼原则：**
+- 剥离业务名词（分支专用实体改成通用表述）
+- 保留 Why 和影响范围
+- pending-promotion 里的原条目是**候选**，不是必选 — 审核时该丢就丢
+- mode 默认 append（避免覆盖已有 shared 条目）
 
-**不上提**的内容：当前 commit hash、进度、下一步、具体业务字段名、临时 mock。这些和分支强绑定，归档即弃。
-
-把决定写成 `harvest.json`（schema 见 `references/harvest-schema.md`）。
-
-### Step 4: Apply
+### Step 3: apply
 
 ```bash
 python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py apply \
-  --repo <repo-path> --harvest-file harvest.json
+  --harvest-file /tmp/graduate-harvest.json \
+  [--repo <repo-path>] [--branch <branch-name>]
 ```
 
-脚本会：
+执行后：
+- harvest 条目 append 到 repo_overview / repo_decisions / repo_glossary
+- 在 branch_dir 生成 `archive_summary.md`（含 harvest notes + 归档时元数据 + git log）
+- 如 `archive: true`（默认），分支目录搬到 `branches/_archived/<branch>__<date>/`
+- `_archived/INDEX.md` 追加一行索引
 
-1. 按 `harvest.json` 把上提条目写入 repo 共享层（mode=append 追加，mode=replace 覆盖整个 section）
-2. 在 branch dir 内生成 `archive_summary.md`：归档时间 / 最终 HEAD / git log 摘要 / harvest 概要
-3. `mv branches/<key>/` → `branches/_archived/<key>__<YYYYMMDD>/`
-4. append 一行到 `branches/_archived/INDEX.md`
-
-### Step 5: Verify
-
-跑：
+### Step 4: 查索引
 
 ```bash
-python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py index --repo <repo-path>
+python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py index
 ```
 
-确认归档条目已经在 INDEX.md 里。同时建议跑一次 `dev-assets-context` 确认 SessionStart 注入不再带这个分支的内容。
+列出所有已归档分支。
 
 ## Always / Never
 
 **Always:**
 
-- 显式触发，绝不 implicit 调用
-- dry-run 必跑，让用户看完整对比再决定
-- 上提前必须剥离业务名词，repo 共享层是给"任何分支"看的
-- 归档前生成 `archive_summary.md` 留快照
+- dry-run 优先看 primary_sources.pending-promotion
+- 上提时剥离业务名词
+- 上提 decisions 时保留 Why
 
 **Never:**
 
-- 在 no-git 模式触发（无意义）
-- 跳过 dry-run 直接 apply
-- 把当前业务的 RPC/字段名照搬到 repo 共享层
-- 对未合并、未 ahead 的分支强归档（先和用户确认）
-
-## Commands
-
-```bash
-# 看 branch + repo 完整内容对比
-python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py dry-run --repo <repo-path>
-
-# 应用 harvest + 归档
-python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py apply --repo <repo-path> --harvest-file harvest.json
-
-# 列已归档分支
-python3 /absolute/path/to/dev-assets-graduate/scripts/dev_asset_graduate.py index --repo <repo-path>
-```
+- 不经过 dry-run 直接 apply
+- apply 后不看 archive_summary 就关会话
+- 在当前分支还未 merge 时强行归档（除非用户明确要求）
 
 ## Triggering note
 
-skill-creator description optimizer (3 iterations × 24 queries × 3 runs each) 在
-2026-04-22 跑出来的最优分仍是当前 description（precision 100% / test recall ≈ 50%）。
-进一步加关键词 / 明确触发条件反而让 recall 下降到 8–17%。原因是 graduate 的核心动作
-（mv 目录、写文件、调脚本）在 Claude 看来"自己直接能做"，所以即使 description 命中
-了关键词，Claude 仍然倾向不调 skill 而直接动手——这是 Claude Code 触发策略对操作型
-skill 的结构性偏好，不是 description 写法的问题。
+skill-creator description optimizer（3 iterations × 24 queries × 3 runs each）在 2026-04-22 跑过一次。原因是 graduate 的核心动作（mv 目录、写文件、调脚本）在 Claude 看来"自己直接能做"，所以即使 description 命中了关键词，Claude 仍然倾向不调 skill 而直接动手——这是 Claude Code 触发策略对操作型 skill 的结构性偏好，不是 description 写法的问题。
 
-实践建议：当用户希望确保走完整 graduate 流程（harvest 上提 + dry-run + 归档 + INDEX
-登记）而不是裸 mv 时，**显式输入 `/dev-assets-graduate`** 作为 slash command，这样
-绕过 implicit 触发判定。本 skill 描述里所有"显式触发为主"的语义就是这个意图。
+实践建议：当用户希望确保走完整 graduate 流程（harvest 上提 + dry-run + 归档 + INDEX 登记）而不是裸 mv 时，**显式输入 `/dev-assets-graduate`** 作为 slash command，绕过 implicit 触发判定。

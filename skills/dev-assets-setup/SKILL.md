@@ -1,76 +1,137 @@
 ---
 name: dev-assets-setup
-description: Use when a branch starts a new requirement stream or when the current repository has no dev-assets entry for the current branch yet, and Codex should initialize user-home repo+branch memory storage, then collect the branch's current summary and shared source entry points. Also use in non-git working directories that need persistent project memory — setup detects no-git mode and degrades to a single repo-shared layer keyed off a `.dev-assets-id` dotfile, no branch layer is created.
+description: 整理 unsorted.md 里 lazy-init 期间积累的未分类内容，按 decisions/progress/risks/glossary 分类到结构化文件，补充元信息，并把分支记忆标记为 setup_completed。v2 不再是前置门禁 —— capture 永远能 lazy init，setup 只是"整理已有乱炖 + 补元信息"的 promotion 动作。触发词："整理 dev-assets"、"整理一下"、"初始化 dev-assets"、"这个仓库的记忆规整下"；或 unsorted.md 累积到 20+ 条。
 ---
 
 # Dev Assets Setup
 
-为当前 Git 仓库初始化用户目录下的 repo+branch 开发记忆骨架，并在初始化后主动向用户收集最小但关键的资料。
+在 v2 里，setup **不再是前置门禁**。任何 `dev-assets-capture` 写入都会自动把骨架建起来，内容先落到 unsorted.md（如果 heuristic 不确定）或直接落到对应分类文件。
 
-**Workspace mode：** 初始化始终针对单个仓库。cwd 是多 repo workspace 时，必须通过 `--repo <basename>` 明确指定目标仓库，每个新仓库分别调用一次；绝不做批量自动初始化，避免用户意外污染不相关的仓库。
+Setup 的新职责是一个 **promotion 动作**：
 
-**Announce at start:** 用一句简短的话说明将先初始化当前仓库的 repo+branch 记忆目录。
+1. 读 unsorted.md 里 lazy init 期间积累的未分类条目
+2. 和用户一起按 decisions/progress/risks/glossary 分类
+3. merge 到目标文件，清空 unsorted.md
+4. 收集仍然缺的元信息（目标、范围、阶段、约束、源资料入口）
+5. 标 `manifest.setup_completed = true`，此后 capture 的 heuristic 默认从 unsorted 兜底切到 progress 兜底
+
+**Workspace mode：** 始终针对单个仓库。cwd 是多 repo workspace 时，必须通过 `--repo <basename>` 明确指定目标仓库。
+
+**Announce at start:** 用一句简短的话说明将先扫 unsorted 条目展示给用户，再分类 merge 到结构化文件。
+
+## DO / DON'T
+
+**Do:**
+
+- 用户明确说"整理一下 dev-assets"、"初始化 dev-assets"、"规整下这个仓库的记忆"
+- `context show` 显示 `setup_completed=false` 且 `unsorted.md` 有 ≥5 条内容
+- unsorted.md 累积 ≥20 条时 SessionStart 主动提示过一次，用户确认要整理
+
+**Don't:**
+
+- 已 setup 且 unsorted.md 空（没东西可 merge）
+- 批量给多个仓库无差别 setup（必须 `--repo <basename>` 明确一个）
+- 用户只是要写一条内容（那是 capture 的职责，不是 setup）
+- 把原本该直接分类的内容硬塞进 unsorted —— setup 不是中转站
 
 ## Workflow
 
-1. 确认当前目录位于 Git 仓库内。
-2. 运行 `scripts/init_dev_assets.py --repo <repo-path>` 初始化 repo 共享层和当前 branch 层。
-3. 告诉用户创建出的 `repo_dir`、`branch_dir` 和关键文件清单。
-4. 主动索要缺失资料，优先顺序：
-   - 当前目标
-   - 范围边界
-   - 当前阶段
-   - 关键约束
-   - 已知风险或阻塞
-   - 共享源文档 / 链接 / 代码入口
-5. 收到资料后，优先调用 `dev-assets-update` 重写最合适的 section。
-
-## Command
+### Step 1: init（永远安全，幂等）
 
 ```bash
-python3 /absolute/path/to/dev-assets-setup/scripts/init_dev_assets.py --repo <repo-path>
+python3 /absolute/path/to/dev-assets-setup/scripts/init_dev_assets.py init \
+  [--repo <repo-path>] [--branch <branch-name>]
 ```
 
-可选参数：
+输出里包含：
+- `unsorted_entries`：unsorted.md 当前的条目列表
+- `unsorted_count`：条数
+- `setup_completed`：当前 setup 状态
+- `files`：所有路径
 
-- `--context-dir ~/.dev-assets/repos`
-- `--branch <branch-name>`
+### Step 2: 和用户一起分类
 
-## What Gets Created
+把 `unsorted_entries` 列给用户，让用户说每条进哪个分类（或 skip）。如果 LLM 能高置信度分类，主动 propose，用户只需确认/修正。
 
-默认目录结构：
+支持的 kind（和 capture 的 KIND_MAP 对齐）：
 
-```text
-~/.dev-assets/repos/<repo-key>/
-  repo/
-  branches/<branch>/
+| Kind | 去哪里 |
+|---|---|
+| `decision` | branch/decisions.md "关键决策与原因" |
+| `progress` | branch/progress.md "当前进展" |
+| `next` | branch/progress.md "下一步" |
+| `risk` | branch/risks.md "阻塞与注意点" |
+| `glossary` | branch/glossary.md "当前有效上下文" |
+| `source` | branch/glossary.md "分支源资料入口" |
+| `shared-decision` | repo/decisions.md "跨分支通用决策" |
+| `shared-context` | repo/glossary.md "长期有效背景" |
+| `shared-source` | repo/glossary.md "共享入口" |
+| `skip` | 丢弃（比如过时 / 没价值的条目） |
+
+### Step 3: 生成 plan.json 写 merge
+
+plan.json 格式：
+
+```json
+{
+  "classifications": [
+    {"entry": "原条目文本", "kind": "decision"},
+    {"entry": "另一条...", "kind": "shared-context"},
+    {"entry": "过时了...", "kind": "skip"}
+  ],
+  "clear_unsorted_on_done": true
+}
 ```
 
-脚本会：
+运行 merge：
 
-- 为当前 repo 生成稳定的 `repo-key`
-- 初始化 repo 共享层和当前 branch 层
-- 将 storage root 写入本地 Git config：`dev-assets.root`
-- 在检测到旧 `.dev-assets/<branch>/` 时迁移 branch 文件
+```bash
+python3 /absolute/path/to/dev-assets-setup/scripts/init_dev_assets.py merge-unsorted \
+  --plan-file /tmp/dev-assets-merge-plan.json \
+  [--repo <repo-path>]
+```
 
-## Intake Rules
+执行后：
+- 条目按 kind 分组 append 到目标 section
+- unsorted.md 重置为空模板（默认 `clear_unsorted_on_done=true`）
+- `manifest.setup_completed = true`
 
-- 主动问用户要源文档或链接，不要要求用户把整份文档重新手打一遍。
-- branch 层只保留当前分支有效记忆。
-- repo 层只保留跨分支共享资料和长期背景。
-- 如果用户只给零散信息，先整理成当前有效摘要，再写入对应文件。
+### Step 4: 补缺失元信息
+
+setup 之后仍可能有空模板，走 capture 填：
+
+- `--kind overview` → 当前目标
+- `--kind scope` → 范围边界
+- `--kind stage` → 当前阶段
+- `--kind constraint` → 关键约束
+- `--kind shared-source` → 共享源文档入口
+
+### 只标完成不整理（极简路径）
+
+如果 unsorted 是空的，但你想切换默认分类策略（从"不确定 → unsorted"切到"不确定 → progress"），直接跑：
+
+```bash
+python3 /absolute/path/to/dev-assets-setup/scripts/init_dev_assets.py mark-completed \
+  [--repo <repo-path>]
+```
+
+## Intake Rules（问用户时的原则）
+
+- 主动问用户要源文档或链接，不要让用户把整份文档手打一遍
+- branch 层只留当前分支有效记忆
+- repo 层只留跨分支共享资料和长期背景
+- 零散信息整理成当前有效摘要再写
 
 ## Always / Never
 
 **Always:**
 
-- 初始化 repo 共享层和当前 branch 层
-- 初始化后立即告诉用户缺哪些关键入口信息
-- 优先收“当前摘要 + 共享资料入口”
-- 让用户目录下的 dev-assets 成为主记忆入口
+- 先跑 init 看 unsorted_entries
+- merge 时尊重用户选择的分类，不擅自修改
+- setup_completed = true 后告诉用户 heuristic 兜底已切换
 
 **Never:**
 
-- 只建目录不做资料 intake
-- 继续复制 `prd / review / frontend / backend / test` 一整套正文
+- 拒绝写入（v2 capture 永远 lazy init；如果 setup 没跑过，capture 会用 unsorted 兜底）
+- 继续复制整份 prd/review/frontend/backend/test 正文
 - 把仓库工作区当成本地记忆主目录

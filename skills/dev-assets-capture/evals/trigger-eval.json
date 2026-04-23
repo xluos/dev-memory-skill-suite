@@ -1,0 +1,102 @@
+[
+  {
+    "query": "OK 我们决定改掉 Codex rollout 丢失时的 fresh retry 策略了，改成抛 CodexMissingResumeError 让 Kernel 显示恢复按钮。影响是失败的任务会停在提示卡不会静默新开。记一笔吧。",
+    "should_trigger": true,
+    "note": "明确的 decision + 用户说'记一笔'；典型 capture 触发"
+  },
+  {
+    "query": "帮我把刚才说的那条 commit 一下先，今晚有点晚了先到这，明天接着搞",
+    "should_trigger": true,
+    "note": "checkpoint 短语组合：commit/先到这/明天接着搞，标准 capture 场景"
+  },
+  {
+    "query": "之前记的那个结论已经过时了，runner_session_id 现在不再是字符串而是对象结构，把 dev-assets 里对应那条改了吧",
+    "should_trigger": true,
+    "note": "改写旧记忆场景：'过时了'/'改了吧'"
+  },
+  {
+    "query": "阻塞：恢复卡按钮 pending 状态目前是进程内 Map，服务重启后旧按钮会失效，需要用户重新发消息触发。这个坑得记一下。",
+    "should_trigger": true,
+    "note": "阻塞描述 + 显式'记一下'；risk kind"
+  },
+  {
+    "query": "我发现一个通用模式，以后做这种状态机式的交互都可以借鉴——pending 状态别放进程内，要么走数据库要么用户显式确认。这是经验，沉淀到 dev-assets 里。",
+    "should_trigger": true,
+    "note": "跨分支经验 + '沉淀到 dev-assets'；触发 cross-branch 打标"
+  },
+  {
+    "query": "刚才我说的那几条同步到 dev-assets 里吧：1) 决定用 Drizzle 不用 Prisma；2) session_id 迁移到新 schema；3) 有个坑是 trigger resume 会死锁",
+    "should_trigger": true,
+    "note": "用户主动要求批量同步，典型 session-payload 场景"
+  },
+  {
+    "query": "这一轮做完了，给我整理一个 checkpoint — 当前进展、风险、下一步，我准备关会话了",
+    "should_trigger": true,
+    "note": "'做完了' + 'checkpoint' + 关会话；标准批量 capture"
+  },
+  {
+    "query": "我刚跟 @xushuaiwu 对过了，feature/codex-card 这条线的 runner.terminate() 必须在 post-hook 调，不能在主循环里 —— 这个决策记一下，以后做 runner 相关都要遵守",
+    "should_trigger": true,
+    "note": "明确的结论 + 跨分支适用性'以后做 runner 相关'"
+  },
+  {
+    "query": "dev-assets 里加一条：InboundMessageTaskPayload 新增了 forceNewRunnerSession 字段，用于显式绕过 runner resume",
+    "should_trigger": true,
+    "note": "直接用'dev-assets 里加一条'的指令式写入"
+  },
+  {
+    "query": "明天再继续，我先 commit 现有进度",
+    "should_trigger": true,
+    "note": "checkpoint 最小示例：'明天再继续'+'commit'"
+  },
+  {
+    "query": "看看当前分支的 dev-assets 记忆到哪了，我有点忘了之前结论",
+    "should_trigger": false,
+    "note": "纯读取需求，应该走 dev-assets-context 不是 capture"
+  },
+  {
+    "query": "这个分支可以归档了，给我走一遍 graduate 流程，提炼下跨分支经验",
+    "should_trigger": false,
+    "note": "显式归档请求，应该走 dev-assets-graduate"
+  },
+  {
+    "query": "帮我看下 git log，commit b8e2f1 改了什么",
+    "should_trigger": false,
+    "note": "纯 git 操作，不涉及记忆"
+  },
+  {
+    "query": "帮我查下 agentara 里 session.ts 的 resumeRunnerSession 函数实现，我要看下逻辑",
+    "should_trigger": false,
+    "note": "代码阅读请求，不涉及写入"
+  },
+  {
+    "query": "你刚才说的那个错了吧，CodexMissingResumeError 应该从 SessionManager 抛出来不是 Kernel",
+    "should_trigger": false,
+    "note": "对话中的纠正，结论还在讨论中，不该写入"
+  },
+  {
+    "query": "我现在有个问题，runner.start() 为什么要传 abortSignal？这是 skill 的要求吗？",
+    "should_trigger": false,
+    "note": "单纯问题求解，没有可持久化的信息"
+  },
+  {
+    "query": "整理一下 dev-assets，之前几次会话零散记了好多未分类的东西，统一规整下",
+    "should_trigger": false,
+    "note": "应该走 dev-assets-setup 的 merge-unsorted 流程，不是 capture"
+  },
+  {
+    "query": "帮我跑一下 bun test tests/kernel/codex-resume-card.test.ts 看下是不是绿的",
+    "should_trigger": false,
+    "note": "纯命令执行请求"
+  },
+  {
+    "query": "把这段代码转成 TypeScript：const x = ...",
+    "should_trigger": false,
+    "note": "代码转换请求，与记忆无关"
+  },
+  {
+    "query": "我想知道 drizzle 和 prisma 有什么本质区别",
+    "should_trigger": false,
+    "note": "通用技术咨询，不是本仓库记忆"
+  }
+]

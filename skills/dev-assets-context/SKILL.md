@@ -1,6 +1,6 @@
 ---
 name: dev-assets-context
-description: Use when starting work in any Git repository conversation on an existing branch, before code edits or repo exploration, when Codex should first recover the current branch's saved development memory, then pull repo-shared memory only if needed. In non-git working directories (no branch concept), this skill recovers the single repo-shared layer instead.
+description: 恢复并读取当前仓库+分支的已有开发记忆。在任何 Git 仓库或非 git 项目开发对话起点、代码编辑前、仓库探索前都应该检查。v2 lazy init：分支目录不存在时会自动建骨架。触发词："这个分支之前到哪了"、"上次我们怎么决定的"、"原来的结论是什么"、"恢复一下上下文"、"看看当前进展"。
 ---
 
 # Dev Assets Context
@@ -11,71 +11,86 @@ description: Use when starting work in any Git repository conversation on an exi
 
 **Announce at start:** 用一句简短的话说明将先恢复当前 branch 记忆，再按需补读 repo 共享记忆。
 
+## DO / DON'T
+
+**Do:**
+
+- 会话起点、代码编辑前、排查前先跑 context（尤其 SessionStart 没注入当前关注的 repo 时）
+- 用户说"之前怎么决定的"/"这个分支上次到哪了"/"原来的结论是什么"/"恢复一下"
+- 需要验证某个历史假设时（context 能帮你查到过去的结论）
+
+**Don't:**
+
+- SessionStart 已注入当前 repo 完整 progress+risks，且本轮需要的信息都在里面
+- 本轮只是问元信息（git status、当前分支名、这是什么文件类）
+- 还没理解用户诉求就先跑 context（先听懂再决定要不要拉记忆）
+
+## Tiered lookup（必读）
+
+按下面顺序查询，命中且够用就停下：
+
+1. **SessionStart 已注入的内容**：通常包括当前 repo 的 progress.md + risks.md 摘要。先看是不是已经覆盖本轮需要，避免重复加载。
+2. **`branches/<current>/progress.md` + `risks.md`**：hot 层，当前进展 + 阻塞。默认就读这两个。
+3. **`branches/<current>/decisions.md`**：需要决策背景（"为什么这么做"）时才补读。
+4. **`branches/<current>/glossary.md`**：需要术语、测试命令、外部链接时补读。
+5. **`shared/*`（repo 共享层）**：需要跨分支约定、长期背景、共享入口时读。
+6. **`branches/_archived/*`（归档）**：查历史问题、追溯某个结论起源时才读。记忆量大时派子 agent 做 FTS/grep + 摘要。
+7. **问用户**：前面都没命中，或信息不全/互相冲突时主动问。
+
+**Sub-agent 派发阈值：** 当 `branches/<current>/*.md` 累计 > 3000 行，或需要跨归档分支检索时，不要主 agent 直接读文件，派 Task 子 agent 只返回 200–1000 字综合摘要，避免吃掉主 context。
+
 ## Workflow
 
 ### Step 1: Locate repo + branch assets
 
-先运行：
-
 ```bash
-python3 /absolute/path/to/dev-assets-context/scripts/dev_asset_context.py show --repo <repo-path>
+python3 /absolute/path/to/dev-assets-context/scripts/dev_asset_context.py show \
+  [--repo <repo-path>] [--branch <branch-name>]
 ```
 
-如果 branch 目录不存在，立即切到 `dev-assets-setup`。
+输出里包含：
+- `setup_completed`：当前分支是否走过 setup merge 流程
+- `missing_or_placeholder`：仍然是空模板或占位符的文件（空 = 没内容，非错误）
+- `files`：所有 v2 文件的绝对路径
 
-### Step 2: Refresh lightweight Git-derived navigation
+v2 lazy init：当 branch_dir 不存在时，show / sync 会自动把骨架建出来，不会报错。
 
-在继续工作前，可以轻量刷新 branch `development.md` 的 Git 自动区和 focus areas：
+### Step 2: 按 Tiered lookup 的顺序读
 
-```bash
-python3 /absolute/path/to/dev-assets-context/scripts/dev_asset_context.py sync --repo <repo-path>
-```
+SessionStart 阶段（hook 自动）会跑一次 context 的 sync 子命令，把 progress.md 的自动同步区刷新成最新 git facts + 注入 progress/risks/decisions 摘要。所以会话开始时你通常不用手工跑 context。
 
-### Step 3: Read in layers
+会话中需要补读时，直接 Read 对应文件：
+- `Read {paths.progress}`
+- `Read {paths.risks}`
+- `Read {paths.decisions}`
 
-默认先读：
-
-- branch `overview.md`
-- branch `development.md`
-- branch `context.md`
-
-只有在确实需要跨分支稳定背景时，再读：
-
-- repo `overview.md`
-- repo `context.md`
-
-只有在需要原始事实时，才去读：
-
-- branch `sources.md`
-- repo `sources.md`
-
-### Step 4: Call out gaps before acting
-
-如果文件仍是模板占位或明显缺失：
-
-- 先指出缺口
-- 再决定是否切到 `dev-assets-update` 或 `dev-assets-setup`
-- 不要把占位模板当成真实事实
-
-## Commands
+需要主动刷新自动同步区（新 commit 没被 pick 到）时：
 
 ```bash
-python3 /absolute/path/to/dev-assets-context/scripts/dev_asset_context.py show --repo <repo-path>
-python3 /absolute/path/to/dev-assets-context/scripts/dev_asset_context.py sync --repo <repo-path>
+python3 /absolute/path/to/dev-assets-context/scripts/dev_asset_context.py sync \
+  [--repo <repo-path>] [--branch <branch-name>]
 ```
+
+### Step 3: 缺内容 → 转 capture
+
+context 只读不写。发现记忆缺关键前提 / 有明显错漏 / 用户提供了新信息，走 `dev-assets-capture` 写入。
+
+## 非 git 模式
+
+cwd 不是 git repo 且没有子 git repo 时：
+- 记忆按 `.dev-assets-id` dotfile 定位到 repo 共享层
+- 没有 branch 概念，所有文件落在 `repo/` 层
+- sync 子命令会跳过（没有 git facts 可收集）
 
 ## Always / Never
 
 **Always:**
 
-- 在 Git 仓库内继续已有分支工作时优先使用本 skill
-- 在开始代码修改前先刷新一次 branch `development.md`
-- 先读 branch，再决定是否补读 repo 共享层
-- 发现缺失资产时明确说出来
+- 先跑 tiered lookup 的前两步（SessionStart 注入 + progress.md + risks.md）
+- 大记忆量时派子 agent，保护主 context
 
 **Never:**
 
-- 不经读取资产目录就直接声称“我已经理解当前需求”
-- 默认把 repo+branch 全部文件一次灌进上下文
-- 把模板占位内容当成真实背景
-- branch 目录缺失时跳过 setup 直接开始改代码
+- 直接 Read 整个 branch 目录（永远按 tiered 顺序，读到够就停）
+- 在 SessionStart 已覆盖时重复加载
+- 在 context show 报 error（比如 git 不在仓库内）时强行继续

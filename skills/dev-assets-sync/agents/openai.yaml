@@ -1,4 +1,0 @@
-interface:
-  display_name: "Dev Assets Sync"
-  short_description: "在提交相关对话里沉淀本次提交留下的关键信息"
-  default_prompt: "Use $dev-assets-sync to treat this checkpoint as commit-local memory persistence: summarize only what this commit should leave behind, update the right memory sections, and leave detailed change history in Git."

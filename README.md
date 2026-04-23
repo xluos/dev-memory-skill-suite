@@ -4,30 +4,26 @@
 
 这套仓库只做一件事：把"开发记忆"从 Git 工作区里拿出来，放到用户目录下，按 `(仓库身份, 分支)` 作为主 key 维护，让跨会话的开发上下文可恢复、可修正、可沉淀、可归档，同时不污染工作区、不和 Git 历史互相干扰。
 
-## 套件里的 6 个 Skill
+## v2 架构：5 个 Skill
+
+v2 把旧的 sync + update 合并成统一的 capture，整套从 6 个 skill 降到 5 个，同时改 setup 为 merge 动作、加 lazy init、加 v1→v2 自动迁移。
 
 | Skill | 定位 | 典型触发 |
 | --- | --- | --- |
-| `using-dev-assets` | 总入口路由器，决定走其它哪个 skill（或不进套件） | 任何 Git 仓库开发对话开头 |
-| `dev-assets-setup` | 初始化用户目录下的 repo+branch 存储骨架 | 新分支 / 新仓库首次开始；no-git 项目首次初始化 |
-| `dev-assets-context` | 恢复当前分支记忆，按需补读 repo 共享层 | 继续已有分支开发 |
-| `dev-assets-update` | 把会话里新形成的稳定理解改写回记忆 | 现有记忆被发现写错、过期或缺关键前提 |
-| `dev-assets-sync` | 在提交/阶段性里程碑等检查点沉淀 durable memory | 刚提交、准备提交、handoff、lifecycle hook 触发 |
-| `dev-assets-graduate` | 分支收尾：提炼可复用知识上提 repo 层后归档 branch 目录 | 用户显式说"归档 / 分支收尾 / 需求做完了 / merge 完清一下" |
+| `using-dev-assets` | 总入口路由器，决定走哪个子 skill | 任何 Git 仓库 / no-git 项目开发对话开头 |
+| `dev-assets-setup` | 整理 unsorted.md + 补元信息 + 标 setup_completed（不再是前置门禁） | unsorted.md 累积、用户明确说"整理一下" |
+| `dev-assets-context` | 恢复当前分支记忆，按 tiered lookup 顺序读 | 继续已有分支开发 |
+| `dev-assets-capture` | **统一写入入口**（合并 sync + update） | 本轮产生稳定结论 / checkpoint / 用户手动记一笔 / 改写旧条目 |
+| `dev-assets-graduate` | 分支收尾：从 pending-promotion 提炼上提 + 归档 branch | 用户显式说"归档 / 分支收尾 / merge 完清一下" |
 
 详细设计与语义见：
 
 - [docs/dev-assets-skill-suite-guide.md](docs/dev-assets-skill-suite-guide.md) — 套件整体说明
 - [docs/workspace-mode.md](docs/workspace-mode.md) — 多 repo workspace 模式
 
-### Update 与 Sync 的边界
+### Lazy init 与 setup 的新关系
 
-两者**不是平级互斥**的触发器：
-
-- `sync` 是检查点时刻的**复合动作包**，内部可以包含 0–N 次 update + HEAD marker + manifest 刷新
-- 检查点时若发现旧记忆写错，正确路径是在 sync 流程里先调 update 再 record-session，不要两个都跳过
-- 非检查点的零散补充 / 修正才是 update 的独立场景
-- 一次性澄清、普通问答既不该 sync 也不该 update
+v2 里 capture 写入永远先 lazy init（骨架不存在就自动建），不再需要前置 setup。setup 的新职责：扫 `unsorted.md` 把未分类条目按用户选择 merge 到 decisions/progress/risks/glossary，再标 `manifest.setup_completed = true`。setup 之前 / 之后的区别是 capture 的 heuristic 兜底策略：之前"不确定 → unsorted"，之后"不确定 → progress"。
 
 ### Graduate 为什么必须显式
 
@@ -179,8 +175,7 @@ skills/
   using-dev-assets/
   dev-assets-setup/
   dev-assets-context/
-  dev-assets-update/
-  dev-assets-sync/
+  dev-assets-capture/
   dev-assets-graduate/
 suite-manifest.json          # 套件 + 历史遗留 skill 命名的唯一表
 ```

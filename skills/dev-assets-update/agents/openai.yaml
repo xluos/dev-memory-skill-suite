@@ -1,4 +1,0 @@
-interface:
-  display_name: "Dev Assets Update"
-  short_description: "在补充新资料或纠正理解偏差时重写当前分支开发记忆"
-  default_prompt: "Use $dev-assets-update when the user wants to add, correct, summarize, or persist new branch-related information into the current branch's development memory, or when repeated misunderstandings or new source material make an implicit memory correction necessary."

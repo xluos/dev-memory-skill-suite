@@ -5,32 +5,25 @@ import json
 import sys
 from pathlib import Path
 
-# Prefer the bundled lib/ when available so all skills share one source. The
-# local skill-copy of dev_asset_common.py only kicks in for portable installs
-# where lib/ is missing.
 _lib = Path(__file__).resolve().parents[3] / "lib"
 if _lib.exists() and str(_lib) not in sys.path:
     sys.path.insert(0, str(_lib))
 
 from dev_asset_common import (
-    asset_paths,
     collect_git_facts,
-    get_branch_paths,
+    ensure_branch_paths_exist,
+    get_setup_completed,
     list_missing_docs,
     read_json,
-    sync_development,
+    sync_progress,
     write_json,
 )
 
 
 def command_show(args):
-    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir = get_branch_paths(
+    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
         args.repo, args.context_dir, args.branch
     )
-    if not branch_dir.exists():
-        raise RuntimeError(f"asset directory does not exist: {branch_dir}. Run dev-assets-setup first.")
-
-    paths = asset_paths(repo_dir, branch_dir)
     payload = {
         "repo_root": str(repo_root),
         "repo_key": repo_key,
@@ -39,6 +32,7 @@ def command_show(args):
         "storage_root": str(storage_root),
         "repo_dir": str(repo_dir),
         "branch_dir": str(branch_dir),
+        "setup_completed": get_setup_completed(paths["manifest"]),
         "files": {key: str(value) for key, value in paths.items()},
         "missing_or_placeholder": list_missing_docs(paths),
     }
@@ -46,15 +40,16 @@ def command_show(args):
 
 
 def command_sync(args):
-    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir = get_branch_paths(
+    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
         args.repo, args.context_dir, args.branch
     )
-    if not branch_dir.exists():
-        raise RuntimeError(f"asset directory does not exist: {branch_dir}. Run dev-assets-setup first.")
+    if branch_name is None:
+        # no-git mode — no git facts to derive.
+        print(json.dumps({"mode": "no-git", "skipped": True}, ensure_ascii=False))
+        return
 
-    paths = asset_paths(repo_dir, branch_dir)
     facts = collect_git_facts(repo_root, branch_name, storage_root)
-    sync_development(paths, facts)
+    sync_progress(paths, facts)
 
     manifest = read_json(paths["manifest"])
     manifest.update(
