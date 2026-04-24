@@ -19,6 +19,8 @@
     "hooks/*.json",
     "hooks/README.md",
     "lib/*.py",
+    "lib/ui-server.js",
+    "lib/ui-app.html",
     "scripts/hooks/_common.py",
     "scripts/hooks/session_start.py",
     "scripts/hooks/pre_compact.py",

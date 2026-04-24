@@ -29,6 +29,8 @@ function run(cmd, args, options = {}) {
 for (const relPath of [
   "package.json",
   "bin/dev-assets.js",
+  "lib/ui-server.js",
+  "lib/ui-app.html",
   "hooks/hooks.json",
   "hooks/codex-hooks.json",
   "suite-manifest.json",
@@ -49,6 +51,7 @@ for (const relPath of [
 }
 
 run("node", ["--check", "bin/dev-assets.js"]);
+run("node", ["--check", "lib/ui-server.js"]);
 run("python3", [
   "-m",
   "py_compile",

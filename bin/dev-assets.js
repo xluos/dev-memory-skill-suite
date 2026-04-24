@@ -186,11 +186,20 @@ function commandInstallHooks(positional, options) {
   process.stdout.write(`${JSON.stringify(isAll ? reports : reports[0], null, 2)}\n`);
 }
 
+function commandUi(_positional, options) {
+  const { start } = require(path.join(PACKAGE_ROOT, "lib", "ui-server.js"));
+  const host = options.host || "127.0.0.1";
+  const port = options.port != null && options.port !== true ? Number(options.port) : 0;
+  const openBrowserFlag = !options["no-open"];
+  start({ host, port, openBrowserFlag });
+}
+
 function printHelp() {
   process.stdout.write(`Usage:
   dev-assets hook <session-start|pre-compact|stop|session-end> [--repo PATH]
   dev-assets install-hooks <codex|claude> [--repo PATH] [--global]
   dev-assets install-hooks --all [--repo PATH] [--global]
+  dev-assets ui [--port N] [--host HOST] [--no-open]
 
 Environment:
   DEV_ASSETS_ROOT defaults to ${DEFAULT_STORAGE_ROOT}
@@ -210,6 +219,10 @@ function main() {
   }
   if (command === "install-hooks") {
     commandInstallHooks(positional, options);
+    return;
+  }
+  if (command === "ui") {
+    commandUi(positional, options);
     return;
   }
   fail(`unknown command: ${command}`);
