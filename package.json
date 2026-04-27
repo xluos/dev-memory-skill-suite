@@ -1,6 +1,6 @@
 {
   "name": "@xluos/dev-assets-cli",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "CLI for dev-assets hooks and repo-local setup",
   "license": "MIT",
   "scripts": {
