@@ -145,18 +145,31 @@
   <text x="70" y="775" font-size="13" font-weight="700" fill="#7c3aed" letter-spacing="3">④  分支记忆生命周期 · CLI</text>
   <line x1="430" y1="770" x2="1360" y2="770" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,4"/>
 
-  <rect x="80" y="790" width="1280" height="100" rx="12" fill="#faf5ff" stroke="#a78bfa" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="80" y="790" width="1280" height="110" rx="12" fill="#faf5ff" stroke="#a78bfa" stroke-width="1.5" filter="url(#shadow)"/>
   <text x="105" y="818" font-size="14" font-weight="700" fill="#6d28d9" font-family="ui-monospace,monospace">dev-memory branch</text>
   <text x="270" y="818" font-size="12" fill="#475569">交互式分支记忆操作（type-ahead 候选 · 默认 abort + --backup / --force 三档冲突）</text>
   <line x1="105" y1="828" x2="1340" y2="828" stroke="#e9d5ff" stroke-width="1"/>
-  <text x="105" y="852" font-size="11" fill="#475569" font-family="ui-monospace,monospace">rename A B</text>
-  <text x="220" y="852" font-size="11" fill="#64748b">迁出</text>
-  <text x="290" y="852" font-size="11" fill="#475569" font-family="ui-monospace,monospace">fork A B</text>
-  <text x="395" y="852" font-size="11" fill="#64748b">复制（自动重写"## 分支"字段 + overview 起源 stamp）</text>
-  <text x="105" y="872" font-size="11" fill="#475569" font-family="ui-monospace,monospace">delete</text>
-  <text x="180" y="872" font-size="11" fill="#64748b">删除</text>
-  <text x="250" y="872" font-size="11" fill="#475569" font-family="ui-monospace,monospace">init</text>
-  <text x="305" y="872" font-size="11" fill="#64748b">重置为空骨架。--force 自带 /tmp 安全网（可恢复）</text>
+
+  <!-- column headers -->
+  <text x="195" y="848" font-size="10" font-weight="700" fill="#a78bfa" letter-spacing="2">单分支</text>
+  <text x="555" y="848" font-size="10" font-weight="700" fill="#a78bfa" letter-spacing="2">跨分支（A → B）</text>
+
+  <!-- vertical column divider -->
+  <line x1="525" y1="838" x2="525" y2="893" stroke="#e9d5ff" stroke-width="1" stroke-dasharray="3,3"/>
+
+  <!-- Row 1: 创建 -->
+  <text x="115" y="870" font-size="11" font-weight="700" fill="#16a34a">⊕ 创建</text>
+  <text x="195" y="870" font-size="11" fill="#1e293b" font-family="ui-monospace,monospace">init</text>
+  <text x="240" y="870" font-size="11" fill="#64748b">从零创建空骨架</text>
+  <text x="545" y="870" font-size="11" fill="#1e293b" font-family="ui-monospace,monospace">fork A B</text>
+  <text x="640" y="870" font-size="11" fill="#64748b">从 A 完整复制到 B（保留 A · 自动重写"## 分支" + overview 起源 stamp）</text>
+
+  <!-- Row 2: 改写/销毁 -->
+  <text x="115" y="888" font-size="11" font-weight="700" fill="#dc2626">↻ 改写</text>
+  <text x="195" y="888" font-size="11" fill="#1e293b" font-family="ui-monospace,monospace">delete</text>
+  <text x="265" y="888" font-size="11" fill="#64748b">移除分支记忆（--force 自带 /tmp 安全网，可恢复）</text>
+  <text x="545" y="888" font-size="11" fill="#1e293b" font-family="ui-monospace,monospace">rename A B</text>
+  <text x="655" y="888" font-size="11" fill="#64748b">A 改名/迁出到 B（A 移除）</text>
 
   <!-- ============== STORAGE LAYER ============== -->
   <text x="70" y="918" font-size="13" font-weight="700" fill="#475569" letter-spacing="3">⑤  存储</text>
