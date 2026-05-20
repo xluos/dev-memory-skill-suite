@@ -333,6 +333,41 @@ h1 { font-size: 19px; font-weight: 600; margin: 0; }
 .unproposed .uplus li .extra-action.on {
   background: var(--reject-bg); color: var(--reject); border-color: var(--reject);
 }
+.unproposed .unproposed-block {
+  border-left: 2px solid var(--border-subtle);
+  padding: 4px 8px 4px 12px;
+  margin: 6px 0 10px;
+  background: rgba(255,255,255,0.4);
+}
+.unproposed .unproposed-block-head {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+.unproposed .unproposed-block-head .extra-action {
+  margin-left: auto;
+  font-size: 10.5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-card);
+  user-select: none;
+  color: var(--fg-subtle);
+}
+.unproposed .unproposed-block-head .extra-action.on {
+  background: var(--reject-bg); color: var(--reject); border-color: var(--reject);
+}
+.unproposed .unproposed-block-preview {
+  font-family: ui-monospace, monospace;
+  color: var(--fg);
+  word-break: break-word;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.unproposed .unproposed-section { margin-bottom: 8px; }
 
 .notes {
   margin-top: 18px;
@@ -433,8 +468,28 @@ const FILE_PURPOSE = {
 const proposalState = {};
 // customFeedback[pid] = textarea contents (preserved across toggles)
 const customFeedback = {};
+// extraActions[key] = "delete" (entry-level, key is entry id)
+//                   | "delete-block" (block-level, key is block id)
+// Mixed namespace works because entry ids contain "::" + integer and
+// block ids contain "::block-" + integer — no collision.
 const extraActions = {};
 const allFiles = TIDY.files || [];
+const allBlocks = TIDY.blocks || [];
+// blocksByFileSection[file_key][section_idx] = [block, ...]
+const blocksByFileSection = (function () {
+  const m = {};
+  for (const b of allBlocks) {
+    if (!m[b.file_key]) m[b.file_key] = {};
+    if (!m[b.file_key][b.section_idx]) m[b.file_key][b.section_idx] = [];
+    m[b.file_key][b.section_idx].push(b);
+  }
+  return m;
+})();
+function blockById(bid) {
+  for (const b of allBlocks) if (b.id === bid) return b;
+  return null;
+}
+function isBlockId(key) { return typeof key === "string" && key.indexOf("::block-") !== -1; }
 const PRIORITY_ORDER = { P0: 0, P1: 1, P2: 2, P3: 3, P4: 4, "": 5 };
 // Sort proposals by priority (P0 → P4), unprioritized last; tiebreak by id.
 const allProposals = (TIDY.proposals || [])
@@ -483,6 +538,16 @@ function summarizeAction(action) {
     const cnt = s ? s.entries.length : "?";
     return { badge: "DELETE SECTION", desc: action.file_key + ".md → 整段删除 \"" + title + "\"（含 " + cnt + " 条）" };
   }
+  if (action.type === "delete-block") {
+    const b = blockById(action.block_id);
+    if (b) {
+      const cnt = (b.entry_ids || []).length;
+      const orphan = b.has_orphan_paragraphs ? " + 含 Why/How 段落" : "";
+      const hashGuard = action.expected_content_hash ? "（hash 校验启用）" : "";
+      return { badge: "DELETE BLOCK", desc: b.file + " → " + (b.first_line_preview || "").slice(0, 60) + " 等 " + cnt + " 条" + orphan + hashGuard };
+    }
+    return { badge: "DELETE BLOCK", desc: action.block_id + "（block 未在当前 prepare 中找到）" };
+  }
   if (action.type === "delete-entries") {
     return { badge: "DELETE", desc: "共 " + (action.ids || []).length + " 条 entry" };
   }
@@ -499,6 +564,10 @@ function entriesPreview(action) {
   if (action.type === "delete-section") {
     const s = sectionByIdx(action.file_key, action.section_idx);
     if (s) for (const e of s.entries) ids.push(action.file_key + "::" + action.section_idx + "::" + e.entry_idx);
+  }
+  if (action.type === "delete-block") {
+    const b = blockById(action.block_id);
+    if (b) for (const eid of (b.entry_ids || [])) ids.push(eid);
   }
   if (action.type === "reset-file") {
     const f = allFiles.find(function (x) { return x.file_key === action.file_key; });
@@ -586,46 +655,111 @@ function renderProposals() {
 }
 
 function renderUnproposed() {
-  const covered = new Set();
+  // covered entry ids — any of these has been claimed by some accepted proposal
+  // (or any proposal at all, since the unproposed list is purely informational
+  // before the user decides per-card). Track block ids separately so the
+  // block-level "标 delete-block" affordance is hidden for already-covered blocks.
+  const coveredEntries = new Set();
+  const coveredBlocks = new Set();
   for (const p of allProposals) {
     for (const a of (p.actions || [])) {
-      if (a.type === "delete-entries") for (const id of (a.ids || [])) covered.add(id);
-      if (a.type === "edit-entries") for (const e of (a.edits || [])) covered.add(e.id);
+      if (a.type === "delete-entries") for (const id of (a.ids || [])) coveredEntries.add(id);
+      if (a.type === "edit-entries") for (const e of (a.edits || [])) coveredEntries.add(e.id);
       if (a.type === "delete-section") {
         const s = sectionByIdx(a.file_key, a.section_idx);
-        if (s) for (const e of s.entries) covered.add(a.file_key + "::" + a.section_idx + "::" + e.entry_idx);
+        if (s) for (const e of s.entries) coveredEntries.add(a.file_key + "::" + a.section_idx + "::" + e.entry_idx);
+        const sblocks = (blocksByFileSection[a.file_key] || {})[a.section_idx] || [];
+        for (const b of sblocks) coveredBlocks.add(b.id);
+      }
+      if (a.type === "delete-block") {
+        const b = blockById(a.block_id);
+        if (b) {
+          for (const eid of (b.entry_ids || [])) coveredEntries.add(eid);
+          coveredBlocks.add(b.id);
+        }
       }
       if (a.type === "reset-file") {
         const f = allFiles.find(function (x) { return x.file_key === a.file_key; });
         if (f) for (const s of f.sections) for (const e of s.entries) {
-          covered.add(a.file_key + "::" + s.section_idx + "::" + e.entry_idx);
+          coveredEntries.add(a.file_key + "::" + s.section_idx + "::" + e.entry_idx);
         }
+        for (const b of allBlocks) if (b.file_key === a.file_key) coveredBlocks.add(b.id);
       }
     }
   }
 
   const body = document.getElementById("unproposed-body");
   body.innerHTML = "";
-  let totalUnproposed = 0;
+  let totalUnproposedEntries = 0;
   for (const f of allFiles) {
-    const items = [];
+    // Group surviving entries by section, then by block (so the user sees the
+    // semantic structure rather than a flat bullet list).
+    const sectionChunks = [];
     for (const s of f.sections) {
+      const sectionBlocks = (blocksByFileSection[f.file_key] || {})[s.section_idx] || [];
+      const blockChunks = [];
+      // entries that survived covered filter, keyed by block_idx for grouping
+      const entryByIdx = {};
       for (const e of s.entries) {
         const id = f.file_key + "::" + s.section_idx + "::" + e.entry_idx;
-        if (covered.has(id)) continue;
-        const action = extraActions[id];
-        const placeholder = e.is_placeholder ? "<span class=\"file-tag\">[占位]</span>" : "";
-        items.push(
-          "<li data-eid=\"" + id + "\">" +
-            "<span class=\"file-tag\">[" + escapeHtml(s.title) + "]</span>" +
-            placeholder + escapeHtml(e.text) +
-            "<span class=\"extra-action " + (action === "delete" ? "on" : "") + "\" onclick=\"toggleExtra('" + id + "')\">" + (action === "delete" ? "✓ 标 delete" : "标 delete") + "</span>" +
-          "</li>"
-        );
+        if (coveredEntries.has(id)) continue;
+        entryByIdx[e.entry_idx] = e;
       }
+      if (Object.keys(entryByIdx).length === 0) continue;
+      // Map each surviving entry to its enclosing block (entry_idx_range).
+      // Blocks whose entries are *all* covered won't appear here.
+      for (const b of sectionBlocks) {
+        if (coveredBlocks.has(b.id)) continue;
+        const blockEntries = [];
+        for (const eid of (b.entry_ids || [])) {
+          const idx = parseInt(eid.split("::").pop(), 10);
+          if (entryByIdx[idx] != null) blockEntries.push({ id: eid, e: entryByIdx[idx] });
+        }
+        if (!blockEntries.length) continue;
+        const blockAction = extraActions[b.id];
+        const blockActive = blockAction === "delete-block";
+        // Only show block-level affordance when the block has ≥2 entries or
+        // has orphan paragraphs — single-entry blocks degenerate into the
+        // entry-level case and showing both buttons would be noise.
+        const blockButtonHtml = ((b.entry_ids || []).length >= 2 || b.has_orphan_paragraphs)
+          ? "<span class=\"extra-action " + (blockActive ? "on" : "") + "\" onclick=\"toggleExtraBlock('" + b.id + "')\" title=\"删整个语义单元（含 Why/How 段落，校验 content_hash）\">" +
+              (blockActive ? "✓ 标 delete-block" : "标 delete-block") +
+            "</span>"
+          : "";
+        const itemsHtml = blockEntries.map(function (be) {
+          const entryAction = extraActions[be.id];
+          // When the parent block is flagged for delete-block, suppress the
+          // per-entry button to avoid the user double-flagging the same line.
+          const entryButton = blockActive
+            ? "<span class=\"file-tag\" style=\"opacity:0.55\">block 覆盖</span>"
+            : "<span class=\"extra-action " + (entryAction === "delete" ? "on" : "") + "\" onclick=\"toggleExtra('" + be.id + "')\">" + (entryAction === "delete" ? "✓ 标 delete" : "标 delete") + "</span>";
+          const placeholder = be.e.is_placeholder ? "<span class=\"file-tag\">[占位]</span>" : "";
+          return "<li data-eid=\"" + be.id + "\">" + placeholder + escapeHtml(be.e.text) + entryButton + "</li>";
+        }).join("");
+        const blockHeaderText = (b.first_line_preview || "").slice(0, 80) || "(empty block)";
+        const orphanTag = b.has_orphan_paragraphs ? "<span class=\"file-tag\">含 Why/How</span>" : "";
+        blockChunks.push(
+          "<div class=\"unproposed-block\" data-bid=\"" + b.id + "\">" +
+            "<div class=\"unproposed-block-head\">" +
+              "<span class=\"file-tag\">" + escapeHtml(b.id) + "</span>" +
+              orphanTag +
+              "<span class=\"unproposed-block-preview\">" + escapeHtml(blockHeaderText) + "</span>" +
+              blockButtonHtml +
+            "</div>" +
+            "<ul class=\"uplus\">" + itemsHtml + "</ul>" +
+          "</div>"
+        );
+        totalUnproposedEntries += blockEntries.length;
+      }
+      if (!blockChunks.length) continue;
+      sectionChunks.push(
+        "<div class=\"unproposed-section\">" +
+          "<div class=\"file-tag\" style=\"margin: 6px 0 4px;\">[" + escapeHtml(s.title) + "]</div>" +
+          blockChunks.join("") +
+        "</div>"
+      );
     }
-    if (!items.length) continue;
-    totalUnproposed += items.length;
+    if (!sectionChunks.length) continue;
     const block = document.createElement("div");
     block.className = "file-block";
     const purpose = FILE_PURPOSE[f.label] || "";
@@ -634,12 +768,12 @@ function renderUnproposed() {
         "<span>" + escapeHtml(f.label) + "</span>" +
         (purpose ? "<span class=\"file-purpose\">" + escapeHtml(purpose) + "</span>" : "") +
       "</div>" +
-      "<ul class=\"uplus\">" + items.join("") + "</ul>";
+      sectionChunks.join("");
     body.appendChild(block);
   }
   document.getElementById("unproposed-summary").textContent =
-    "未被任何 proposal 覆盖的条目（" + totalUnproposed + " 条，默认全部 keep）";
-  if (!totalUnproposed) {
+    "未被任何 proposal 覆盖的条目（" + totalUnproposedEntries + " 条，按 block 分组，默认全部 keep）";
+  if (!totalUnproposedEntries) {
     body.innerHTML = "<div class=\"empty\" style=\"margin: 12px;\">所有条目都已被 proposal 覆盖</div>";
   }
 }
@@ -647,6 +781,22 @@ function renderUnproposed() {
 window.toggleExtra = function (id) {
   if (extraActions[id] === "delete") delete extraActions[id];
   else extraActions[id] = "delete";
+  renderUnproposed();
+  refreshSummary();
+};
+
+window.toggleExtraBlock = function (blockId) {
+  if (extraActions[blockId] === "delete-block") {
+    delete extraActions[blockId];
+  } else {
+    extraActions[blockId] = "delete-block";
+    // When toggling on a block, clear any per-entry delete flags inside it —
+    // delete-block subsumes them and they'd just produce redundant actions.
+    const b = blockById(blockId);
+    if (b) for (const eid of (b.entry_ids || [])) {
+      if (extraActions[eid] === "delete") delete extraActions[eid];
+    }
+  }
   renderUnproposed();
   refreshSummary();
 };
@@ -695,8 +845,19 @@ function exportPlan() {
       });
     }
   }
-  for (const eid in extraActions) {
-    if (extraActions[eid] === "delete") actions.push({ id: eid, action: "delete" });
+  for (const key in extraActions) {
+    const v = extraActions[key];
+    if (v === "delete") {
+      // entry-level extra: legacy {id, action} form for apply backward compat
+      actions.push({ id: key, action: "delete" });
+    } else if (v === "delete-block") {
+      // block-level extra: emit a delete-block action and pin content_hash so
+      // apply refuses to fire if the block content drifted between prepare/apply
+      const b = blockById(key);
+      const act = { type: "delete-block", block_id: key };
+      if (b && b.content_hash) act.expected_content_hash = b.content_hash;
+      actions.push(act);
+    }
   }
   const plan = {
     tidy_id: TIDY.scope.generated_at,
