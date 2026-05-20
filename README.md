@@ -57,6 +57,7 @@ append 类 kind 写入前会对目标 section 做相似度查重，阻止 append
   - 误判同义 / 暂不写 → 不调任何命令
 - **绕过**：`--force` flag；upsert 类 kind（progress / next / overview / scope / stage / constraint）天然跳过 dedup
 - **批量**：`--summary-json` 每条独立 check，blocked 项进 stdout `dedup_blocked[]`，未 blocked 部分照常写
+- **调试 / 实验**：可用 `--dedup-threshold <float>`（隐藏参数，范围 (0.0, 1.0]）临时覆盖默认 0.7 阈值，生产场景不建议改
 
 ### Setup vs Tidy vs Graduate（三个整理动作的边界）
 

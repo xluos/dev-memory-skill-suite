@@ -326,7 +326,7 @@ def _load_section_body(target_path, section_title):
     return ""
 
 
-def _check_dedup_for_kind(paths, kind, body, force=False, title_override=None):
+def _check_dedup_for_kind(paths, kind, body, force=False, title_override=None, threshold=None):
     """Return a dedup_hint dict if the write should be blocked, else None.
 
     Pure read; writes nothing. Skips:
@@ -335,6 +335,13 @@ def _check_dedup_for_kind(paths, kind, body, force=False, title_override=None):
       - force=True (explicit opt-out)
       - kinds not in KIND_MAP (caller handles error elsewhere)
       - empty/whitespace body (caller handles error elsewhere)
+
+    `threshold` (optional float in (0.0, 1.0]) overrides similarity_check's
+    default 0.7. None preserves default behavior — kept as the production
+    contract; the override is exposed only via the hidden CLI flag
+    `--dedup-threshold` for debugging / experiments. Validation of the range
+    is performed at the CLI layer (command_record) before reaching here, so
+    this helper trusts the caller's value when it's not None.
 
     When matches are found, the returned hint includes each match's full
     `<file_key>::<section_idx>::<entry_idx>` id so the agent can pass it
@@ -354,7 +361,10 @@ def _check_dedup_for_kind(paths, kind, body, force=False, title_override=None):
     target_path = paths[file_key]
     section_title = (title_override or spec["section"]).strip()
     section_body = _load_section_body(target_path, section_title)
-    matches = similarity_check(body, section_body)
+    if threshold is None:
+        matches = similarity_check(body, section_body)
+    else:
+        matches = similarity_check(body, section_body, threshold=threshold)
     if not matches:
         return None
 
@@ -737,6 +747,21 @@ def command_record(args):
     already_setup = get_setup_completed(paths["manifest"])
     force = bool(getattr(args, "force", False))
 
+    # Hidden --dedup-threshold override. Validated here so the error surface
+    # is consistent with other record-time failures (RuntimeError → exit 1 +
+    # error JSON via main's try/except). None means "use similarity_check
+    # default" — the production path.
+    dedup_threshold = getattr(args, "dedup_threshold", None)
+    if dedup_threshold is not None:
+        if not isinstance(dedup_threshold, (int, float)):
+            raise RuntimeError(
+                f"--dedup-threshold must be a number, got {type(dedup_threshold).__name__}"
+            )
+        if not (0.0 < dedup_threshold <= 1.0):
+            raise RuntimeError(
+                f"--dedup-threshold must be in (0.0, 1.0], got {dedup_threshold}"
+            )
+
     touched = []
     dedup_blocked = []  # entries that were stopped by dedup check (batch mode)
     mode_used = None
@@ -757,7 +782,10 @@ def command_record(args):
             `source_label` is a free-form tag (e.g. "decisions[0]") so the
             caller can correlate the blocked entry back to its payload slot.
             """
-            hint = _check_dedup_for_kind(paths, kind, body, force=force, title_override=title_override)
+            hint = _check_dedup_for_kind(
+                paths, kind, body, force=force,
+                title_override=title_override, threshold=dedup_threshold,
+            )
             if hint is not None:
                 dedup_blocked.append({
                     "source": source_label,
@@ -830,7 +858,10 @@ def command_record(args):
         # Dedup pre-check: if blocked, do not write — return hint and exit
         # with code 2 so callers can distinguish "blocked, take action" from
         # "actual error" (exit 1).
-        hint = _check_dedup_for_kind(paths, kind, content, force=force, title_override=args.title)
+        hint = _check_dedup_for_kind(
+            paths, kind, content, force=force,
+            title_override=args.title, threshold=dedup_threshold,
+        )
         if hint is not None:
             print(json.dumps({
                 "blocked": True,
@@ -1179,6 +1210,16 @@ def main():
         "--force",
         action="store_true",
         help="Skip dedup check and append unconditionally (use after reviewing matches[] in a prior blocked response)",
+    )
+    # Hidden debugging/experiment flag: override similarity_check's default
+    # 0.7 threshold. Range (0.0, 1.0]; outside that command_record raises
+    # → exit 1 + error JSON. Not in --help on purpose (argparse.SUPPRESS) —
+    # production callers shouldn't need to touch this.
+    record.add_argument(
+        "--dedup-threshold",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,
     )
 
     rewrite = subparsers.add_parser(
