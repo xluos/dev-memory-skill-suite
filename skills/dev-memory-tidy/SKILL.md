@@ -180,6 +180,7 @@ npx dev-memory tidy apply \
 - **`custom_proposals` 不 apply**：apply 把它们记到 summary 的"custom proposals (NOT applied)"section，列出每条用户反馈
 - 在 `branches/<branch>/tidy_review/summary_<ts>.md` 写一份 summary（accepted/rejected/custom 计数、rewritten 列表、custom 反馈原文、invalid 列表）
 - **block_idx 漂移保护**：apply 时 delete-block 会**重新解析**当前文件的 block 结构（不依赖 prepare 时的快照），如果 block_idx 越界（用户中途手改了文件）→ 该 action 进 invalid 列表，不会误删邻块
+- **内容指纹保护（可选、推荐）**：plan.json 里的 delete-block 可以附 `expected_content_hash` 触发更强的内容校验。prepare 输出的 `blocks[].content_hash`（16 字符 hex）就是这一份指纹 —— agent 把要删的 block 的 hash 原样 copy 到 action 里即可。apply 时如果 block_idx 没越界但 block 内容已经漂移（用户手动改了块内容、编号未变）→ 该 action 进 invalid，记 `reason: "content_hash_mismatch"` + `expected` / `actual` 字段，不删任何 block。不带 `expected_content_hash` 的 action 行为不变（仅做越界检查），向后兼容旧 plan.json
 
 ### Step 5（仅当有 custom）: 读用户反馈，按反馈内容判断怎么处理
 

@@ -23,6 +23,7 @@ Skipped on purpose:
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -292,6 +293,24 @@ def _block_id(file_key, section_idx, block_idx):
     return f"{file_key}::{section_idx}::block-{block_idx}"
 
 
+def _block_content_hash(raw_lines):
+    """Compute a deterministic 16-char hex hash of a block's content.
+
+    `raw_lines` is the list of original source lines that make up the block
+    (top-level bullet + sub-bullets + absorbed orphan paragraphs, as captured
+    by `_parse_blocks`; `push_current` has already trimmed trailing blanks).
+    Joined with `\n` to form a stable byte sequence, SHA-256'd, then
+    truncated to 16 hex chars — long enough to keep collisions astronomically
+    unlikely across one section, short enough to keep plan.json readable.
+
+    Used by `apply` to detect that a block's content drifted between
+    `prepare` and `apply` (e.g. user edited a bullet but block_idx stayed
+    the same), so delete-block can refuse to nuke the wrong unit.
+    """
+    raw_text = "\n".join(raw_lines)
+    return hashlib.sha256(raw_text.encode("utf-8")).hexdigest()[:16]
+
+
 def _parse_block_id(bid):
     """Return (file_key, section_idx, block_idx) or None on bad input."""
     if not isinstance(bid, str):
@@ -426,6 +445,15 @@ def _validate_proposals(raw):
                         f"proposal {pid} action #{j} delete-block needs block_id of form "
                         f"'<file_key>::<section_idx>::block-<N>' (got {bid!r})"
                     )
+                # Optional content fingerprint. apply will re-hash the block
+                # at the resolved location and refuse to delete if the value
+                # drifted; absent means "skip the content check".
+                ech = a.get("expected_content_hash")
+                if ech is not None and not isinstance(ech, str):
+                    raise ValueError(
+                        f"proposal {pid} action #{j} delete-block expected_content_hash "
+                        f"must be a string if provided (got {type(ech).__name__})"
+                    )
             cleaned_actions.append(a)
         priority = (p.get("priority") or "").strip().upper()
         if priority and priority not in VALID_PRIORITIES:
@@ -489,6 +517,11 @@ def _collect_blocks(files):
                     "first_line_preview": b["first_line_preview"],
                     "entry_ids": entry_ids,
                     "has_orphan_paragraphs": b["has_orphan_paragraphs"],
+                    # 16-char fingerprint of the block's raw source bytes —
+                    # agent copies this verbatim into plan.json's delete-block
+                    # action as `expected_content_hash`; apply re-hashes the
+                    # current file and refuses to delete if the value drifted.
+                    "content_hash": _block_content_hash(b["raw_lines"]),
                 })
     return by_fs, flat
 
@@ -778,15 +811,44 @@ def _rewrite_file(path, plan_actions_by_section):
     path.write_text(join_sections(prefix, new_sections), encoding="utf-8")
 
 
-def _delete_blocks_from_section(body, block_indices):
+def _delete_blocks_from_section(body, block_drops):
     """Re-parse the section body into blocks (source of truth at apply
     time — block_idx from prepare is informational) and drop the listed
-    block_indices, returning the rewritten body. Block deletion takes the
+    block indices, returning the rewritten body. Block deletion takes the
     block's full raw_lines: top-level bullet + any sub-bullets + absorbed
-    orphan paragraphs."""
+    orphan paragraphs.
+
+    `block_drops` is a mapping `{block_idx: expected_content_hash | None}`.
+    A non-None hash is compared against the live block's hash after
+    re-parsing; mismatch lands in the invalid list with reason
+    `content_hash_mismatch` and the block is NOT deleted. None skips the
+    content check (back-compat for plans written before the guard existed).
+
+    Returns (rebuilt_body, invalid_entries) where each invalid entry is a
+    dict with at least `block_idx` and `reason`; mismatches also include
+    `expected` and `actual` hash fields for debugging.
+    """
     blocks = _parse_blocks(body)
-    drop = {i for i in block_indices if 0 <= i < len(blocks)}
-    invalid = [i for i in block_indices if i not in drop]
+    invalid = []
+    drop = set()
+    for bidx, expected_hash in block_drops.items():
+        if not (0 <= bidx < len(blocks)):
+            invalid.append({
+                "block_idx": bidx,
+                "reason": "block_idx out of range after re-parse",
+            })
+            continue
+        if expected_hash is not None:
+            actual_hash = _block_content_hash(blocks[bidx]["raw_lines"])
+            if actual_hash != expected_hash:
+                invalid.append({
+                    "block_idx": bidx,
+                    "reason": "content_hash_mismatch",
+                    "expected": expected_hash,
+                    "actual": actual_hash,
+                })
+                continue
+        drop.add(bidx)
 
     # Strategy: replay the original body line-by-line, skipping lines that
     # belong to a dropped block. Because raw_lines is captured verbatim
@@ -882,8 +944,10 @@ def _delete_blocks_from_section(body, block_indices):
 
 def _rewrite_file_delete_blocks(path, blocks_by_section):
     """Apply delete-block actions to a single file. blocks_by_section is
-    {section_idx: set(block_idx)}. Returns list of invalid block_idx values
-    (those out of range after re-parsing)."""
+    {section_idx: {block_idx: expected_content_hash | None}}. Returns a list
+    of invalid entries (block_idx out of range, or content_hash drift) —
+    each entry is a dict the caller annotates with file_key + section_idx
+    before surfacing to the user."""
     content = path.read_text(encoding="utf-8")
     prefix, sections = split_sections(content)
     invalid_all = []
@@ -901,8 +965,9 @@ def _rewrite_file_delete_blocks(path, blocks_by_section):
             new_body = (new_head + "\n\n" + tail).strip()
         else:
             new_body, invalid = _delete_blocks_from_section(body, drops)
-        if invalid:
-            invalid_all.extend([(section_idx, i) for i in invalid])
+        for entry in invalid:
+            entry["section_idx"] = section_idx
+            invalid_all.append(entry)
         new_sections.append((title, new_body))
     path.write_text(join_sections(prefix, new_sections), encoding="utf-8")
     return invalid_all
@@ -978,7 +1043,21 @@ def command_apply(args):
                 if fk not in paths:
                     invalid.append({"action": item, "reason": f"unknown file_key {fk!r}"})
                     continue
-                delete_blocks.setdefault(fk, {}).setdefault(sidx, set()).add(bidx)
+                # Optional content fingerprint — recorded by prepare and copied
+                # verbatim by the agent. None means "skip the content check"
+                # (back-compat with plans authored before this guard existed).
+                ech = item.get("expected_content_hash")
+                if ech is not None and not isinstance(ech, str):
+                    invalid.append({
+                        "action": item,
+                        "reason": "expected_content_hash must be a string if provided",
+                    })
+                    continue
+                # If the same block id appears twice with different expected
+                # hashes, the last write wins — that's fine for practical use
+                # (agent should never emit two delete-block actions on the
+                # same id; if they do, both want the block gone anyway).
+                delete_blocks.setdefault(fk, {}).setdefault(sidx, {})[bidx] = ech
                 continue
             if atype in ("delete-entries", "edit-entries"):
                 # Either form expands to a list of {id, action[, new_text]}.
@@ -1063,26 +1142,29 @@ def command_apply(args):
                 entry_actions.pop(fk, None)
 
     # Then delete-block per file. We re-parse blocks at apply time (prepare's
-    # block_idx is informational); out-of-range block ids land in `invalid`.
-    # Also prune entry-actions that would fall inside a deleted block so we
-    # don't double-touch lines that are already gone.
+    # block_idx is informational); out-of-range block ids or content-hash
+    # mismatches land in `invalid`. Also prune entry-actions that would fall
+    # inside a deleted block so we don't double-touch lines that are already
+    # gone.
     for fk, sec_blocks in delete_blocks.items():
         path = paths.get(fk)
         if not path or not path.exists():
             invalid.append({"file_key": fk, "op": "delete-block", "reason": "file missing"})
             continue
         # Prune entry-actions that fall inside doomed blocks before we delete.
+        # sec_blocks values are now `{block_idx: expected_hash | None}` dicts;
+        # we just need the block_idx keys for the pruning step.
         if fk in entry_actions:
             content = path.read_text(encoding="utf-8")
             _, sections = split_sections(content)
-            for sidx, bidx_set in sec_blocks.items():
+            for sidx, bidx_map in sec_blocks.items():
                 if sidx >= len(sections):
                     continue
                 body = sections[sidx][1]
                 cleaned = _strip_auto_block(body)
                 blks = _parse_blocks(cleaned)
                 doomed_entry_idx = set()
-                for bidx in bidx_set:
+                for bidx in bidx_map:
                     if 0 <= bidx < len(blks):
                         s, e = blks[bidx]["entry_idx_range"]
                         for k in range(s, e + 1):
@@ -1096,18 +1178,16 @@ def command_apply(args):
             if not entry_actions[fk]:
                 entry_actions.pop(fk, None)
         invalid_blocks = _rewrite_file_delete_blocks(path, sec_blocks)
-        for sidx, bidx in invalid_blocks:
+        for entry in invalid_blocks:
             invalid.append({
                 "op": "delete-block",
                 "file_key": fk,
-                "section_idx": sidx,
-                "block_idx": bidx,
-                "reason": "block_idx out of range after re-parse",
+                **entry,
             })
         rewritten.append({
             "file_key": fk,
             "path": str(path),
-            "op": f"delete-blocks:{ {k: sorted(v) for k, v in sec_blocks.items()} }",
+            "op": f"delete-blocks:{ {k: sorted(v.keys()) for k, v in sec_blocks.items()} }",
         })
 
     # Finally entry-level actions.
