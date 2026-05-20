@@ -88,8 +88,20 @@ REPO_FILE_KEYS = (
 
 VALID_HINTS = {"STALE", "DUP", "OK", "UNCLEAR"}
 VALID_ENTRY_ACTIONS = {"keep", "delete", "edit"}
-VALID_PROPOSAL_TYPES = {"delete-entries", "delete-section", "reset-file", "edit-entries"}
+VALID_PROPOSAL_TYPES = {"delete-entries", "delete-section", "reset-file", "edit-entries", "delete-block"}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3", "P4"}
+
+# Heuristic: lines like `**Why:** ...`, `**How to apply:** ...`, or
+# `**xxx**：...` are "orphan paragraphs" — narrative attached to the
+# previous bullet but not itself in any bullet list. _parse_blocks absorbs
+# them into the preceding block so a single delete-block takes them out
+# together with the bullets they explain. Two accepted shapes:
+#   1. `**Foo:** rest`   — colon inside the bold span (common in CN/EN)
+#   2. `**Foo**: rest`   — colon (half- or full-width) outside the bold span
+import re as _re_block
+_ORPHAN_PARAGRAPH_RE = _re_block.compile(
+    r"^\s*\*\*[^*\n]+[:：]\*\*\s|^\s*\*\*[^*\n]+\*\*\s*[:：]"
+)
 
 
 def _now_stamp():
@@ -145,6 +157,152 @@ def _parse_entries(body):
             "is_placeholder": is_placeholder,
         })
     return indexed
+
+
+def _parse_blocks(body):
+    """Group a section body into semantic 'blocks'. A block is the smallest
+    unit an agent typically wants to delete or move as a whole: a top-level
+    bullet plus its indented sub-bullets, optionally trailed by bold
+    paragraph(s) like `**Why:** ...` that explain it.
+
+    Why this layer exists: `_parse_entries` treats every bullet line —
+    including indented sub-bullets — as a separate entry. That gives
+    surgical edits but loses the parent/child relationship. Block parsing
+    keeps `_parse_entries` intact and adds a second view that re-groups
+    those entries into the semantic unit an agent actually reasons about.
+
+    Block boundary rules:
+      - A top-level `- xxx` (no leading whitespace) starts a new block.
+      - Indented bullets `  - yyy` join the current block — they are still
+        entries (`_parse_entries` counts them), but they belong to the
+        same semantic unit as the top-level bullet above them. The block's
+        `entry_idx_range` therefore spans 1 top-level entry + N sub-bullet
+        entries.
+      - A bold-prefixed paragraph (`**Why:** ...`) immediately following
+        the last bullet — possibly across a single blank line — is
+        absorbed as the block's tail. Two consecutive blank lines, or any
+        other top-level bullet, terminates the tail. Paragraph lines do
+        NOT count as entries.
+      - Lines before the first bullet are not part of any block (mirrors
+        `_parse_entries` which also ignores them).
+
+    Invariant: every entry produced by `_parse_entries` on the same body
+    falls inside exactly one block. `entry_idx_range` is `[start, end]`
+    inclusive over those entry indices.
+    """
+    lines = body.splitlines()
+    blocks = []
+    current = None
+    pending_blank = False
+    entry_counter = -1  # increments on every bullet line (top-level or sub)
+
+    def push_current():
+        nonlocal current
+        if current is None:
+            return
+        while current["raw_lines"] and not current["raw_lines"][-1].strip():
+            current["raw_lines"].pop()
+        blocks.append(current)
+        current = None
+
+    def is_bullet_line(s):
+        return s.startswith("- ") or s == "-"
+
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            if current is not None:
+                if pending_blank:
+                    push_current()
+                    pending_blank = False
+                else:
+                    pending_blank = True
+                    current["raw_lines"].append(raw)
+            continue
+
+        is_top_bullet = is_bullet_line(stripped) and not (raw.startswith(" ") or raw.startswith("\t"))
+        is_sub_bullet = is_bullet_line(stripped) and (raw.startswith(" ") or raw.startswith("\t"))
+
+        if is_top_bullet:
+            push_current()
+            entry_counter += 1
+            current = {
+                "block_idx": len(blocks),
+                "entry_idx_start": entry_counter,
+                "entry_idx_end": entry_counter,
+                "first_line_preview": stripped[2:].strip()[:160] if stripped.startswith("- ") else stripped[:160],
+                "has_orphan_paragraphs": False,
+                "raw_lines": [raw],
+            }
+            pending_blank = False
+            continue
+
+        if current is None:
+            # Free-form prose before any bullet — drop (mirrors _parse_entries).
+            continue
+
+        if is_sub_bullet:
+            entry_counter += 1
+            current["entry_idx_end"] = entry_counter
+            current["raw_lines"].append(raw)
+            pending_blank = False
+            continue
+
+        # Indented non-bullet continuation (wrapped text under a bullet).
+        # _parse_entries treats this as continuation of the previous entry,
+        # so it doesn't advance entry_counter — neither do we.
+        if raw.startswith(" ") or raw.startswith("\t"):
+            current["raw_lines"].append(raw)
+            pending_blank = False
+            continue
+
+        # Non-indented, non-blank, not a bullet → candidate orphan paragraph.
+        # Absorb if it looks like `**Foo:** ...`. _parse_entries treats it
+        # as continuation of the previous (still-open) entry, but only when
+        # no blank line has separated them. If a single blank line came
+        # between bullet and paragraph, _parse_entries already closed the
+        # previous entry — but we still attach to the block (the paragraph
+        # belongs to the unit semantically).
+        if _ORPHAN_PARAGRAPH_RE.match(raw):
+            current["raw_lines"].append(raw)
+            current["has_orphan_paragraphs"] = True
+            pending_blank = False
+            continue
+
+        # Some other non-bullet prose between bullets — close the current
+        # block; this prose is not owned by anything.
+        push_current()
+        pending_blank = False
+
+    push_current()
+
+    return [
+        {
+            "block_idx": b["block_idx"],
+            "entry_idx_range": [b["entry_idx_start"], b["entry_idx_end"]],
+            "first_line_preview": b["first_line_preview"],
+            "has_orphan_paragraphs": b["has_orphan_paragraphs"],
+            "raw_lines": b["raw_lines"],
+        }
+        for b in blocks
+    ]
+
+
+def _block_id(file_key, section_idx, block_idx):
+    return f"{file_key}::{section_idx}::block-{block_idx}"
+
+
+def _parse_block_id(bid):
+    """Return (file_key, section_idx, block_idx) or None on bad input."""
+    if not isinstance(bid, str):
+        return None
+    parts = bid.split("::")
+    if len(parts) != 3 or not parts[2].startswith("block-"):
+        return None
+    try:
+        return parts[0], int(parts[1]), int(parts[2][len("block-"):])
+    except ValueError:
+        return None
 
 
 def _file_label(file_key):
@@ -261,6 +419,13 @@ def _validate_proposals(raw):
                     f"proposal {pid} action #{j} has invalid type {atype!r}; "
                     f"must be one of {sorted(VALID_PROPOSAL_TYPES)}"
                 )
+            if atype == "delete-block":
+                bid = (a.get("block_id") or "").strip()
+                if not bid or _parse_block_id(bid) is None:
+                    raise ValueError(
+                        f"proposal {pid} action #{j} delete-block needs block_id of form "
+                        f"'<file_key>::<section_idx>::block-<N>' (got {bid!r})"
+                    )
             cleaned_actions.append(a)
         priority = (p.get("priority") or "").strip().upper()
         if priority and priority not in VALID_PRIORITIES:
@@ -275,6 +440,135 @@ def _validate_proposals(raw):
             "actions": cleaned_actions,
         })
     return cleaned
+
+
+def _collect_blocks(files):
+    """Re-parse each scanned section into blocks. Returns a tuple of
+    (blocks_by_file_section, flat_block_index) where:
+
+      - blocks_by_file_section: {file_key: {section_idx: [block, ...]}}
+        with each block carrying its raw_lines (kept internally — not
+        emitted in the public JSON to keep that payload light).
+      - flat_block_index: list of public block dicts safe to dump as JSON,
+        each shaped {id, file, section, first_line_preview, entry_ids,
+        has_orphan_paragraphs}.
+
+    Re-parses on each call rather than threading block info through
+    `_scan_scope` so the existing `_scan_scope` shape stays untouched
+    (and downstream callers — html template — still see the same JSON).
+    """
+    by_fs = {}
+    flat = []
+    for f in files:
+        fk = f["file_key"]
+        by_fs[fk] = {}
+        # Re-read the section bodies (post _strip_auto_block) to get raw_lines.
+        # We can reconstruct them from the file because _scan_scope already
+        # filtered out empty sections — but we still need the original body,
+        # so re-read the file and re-split.
+        content = Path(f["path"]).read_text(encoding="utf-8")
+        _, sections = split_sections(content)
+        for s in f["sections"]:
+            sidx = s["section_idx"]
+            if sidx >= len(sections):
+                by_fs[fk][sidx] = []
+                continue
+            _title, body = sections[sidx]
+            cleaned = _strip_auto_block(body)
+            blocks = _parse_blocks(cleaned)
+            by_fs[fk][sidx] = blocks
+            for b in blocks:
+                start, end = b["entry_idx_range"]
+                entry_ids = [_entry_id(fk, sidx, i) for i in range(start, end + 1)]
+                flat.append({
+                    "id": _block_id(fk, sidx, b["block_idx"]),
+                    "file": f["label"],
+                    "file_key": fk,
+                    "section": s["title"],
+                    "section_idx": sidx,
+                    "first_line_preview": b["first_line_preview"],
+                    "entry_ids": entry_ids,
+                    "has_orphan_paragraphs": b["has_orphan_paragraphs"],
+                })
+    return by_fs, flat
+
+
+def _render_annotated_md(files, blocks_by_fs, scope_meta, output_path):
+    """Write a single .md mirror with id / block / orphan comment markers
+    so an agent can read one file and recover entry id + block boundaries
+    without parsing the original markdown twice.
+
+    Format (see design §1.1):
+      # Tidy entries · <branch> · <timestamp>
+      ## 📄 branch/<file>.md
+      ### <section title>
+      <!-- block: <id> -->
+      - bullet  <!-- id: <entry-id> -->
+        - sub          (no id comment — continuation of the entry above)
+      **Why:** ...  <!-- orphan: paragraph -->
+      <!-- /block -->
+
+    Placeholder entries (`- 待补充` / `- 待刷新`) get an extra
+    `<!-- placeholder -->` so the agent can ignore them at a glance.
+    AUTO-GENERATED blocks are not surfaced (already stripped upstream).
+    """
+    lines = [
+        f"# Tidy entries · {scope_meta['branch']} · {scope_meta['generated_at']}",
+        "",
+    ]
+    for f in files:
+        fk = f["file_key"]
+        lines.append(f"<!-- file: {fk} / {f['label']} -->")
+        lines.append(f"## 📄 {f['label']}")
+        lines.append("")
+        for s in f["sections"]:
+            sidx = s["section_idx"]
+            lines.append(f"<!-- section: {sidx} / {s['title']} -->")
+            lines.append(f"### {s['title']}")
+            blocks = blocks_by_fs.get(fk, {}).get(sidx, [])
+            if not blocks:
+                lines.append("")
+                continue
+            # Build a quick lookup: which entry_idx is the top-level bullet
+            # on each raw_line, so we know which line to tag with `<!-- id -->`.
+            entry_text_by_idx = {e["entry_idx"]: e for e in s["entries"]}
+            for b in blocks:
+                lines.append("")
+                lines.append(f"<!-- block: {_block_id(fk, sidx, b['block_idx'])} -->")
+                start, _end = b["entry_idx_range"]
+                # Walk raw_lines, tagging the first top-level bullet with the
+                # entry id. Sub-bullets and continuation lines are emitted
+                # bare. Orphan paragraph lines get `<!-- orphan: paragraph -->`.
+                seen_top_bullet = False
+                cur_entry_idx = start
+                for raw in b["raw_lines"]:
+                    stripped = raw.strip()
+                    if not stripped:
+                        lines.append(raw)
+                        continue
+                    is_top_bullet = (
+                        stripped.startswith("- ")
+                        and not (raw.startswith(" ") or raw.startswith("\t"))
+                    )
+                    if is_top_bullet:
+                        if seen_top_bullet:
+                            cur_entry_idx += 1
+                        seen_top_bullet = True
+                        ent = entry_text_by_idx.get(cur_entry_idx, {})
+                        eid = _entry_id(fk, sidx, cur_entry_idx)
+                        suffix = f"  <!-- id: {eid} -->"
+                        if ent.get("is_placeholder"):
+                            suffix += " <!-- placeholder -->"
+                        lines.append(f"{raw}{suffix}")
+                    elif _ORPHAN_PARAGRAPH_RE.match(raw):
+                        lines.append(f"{raw}  <!-- orphan: paragraph -->")
+                    else:
+                        # Sub-bullet or wrapped continuation — emit bare.
+                        lines.append(raw)
+                lines.append("<!-- /block -->")
+            lines.append("")
+        lines.append("")
+    output_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def _render_html(files, hints, proposals, scope_meta, output_path):
@@ -326,6 +620,12 @@ def command_prepare(args):
     out_path = review_dir / f"review_{scope_meta['generated_at']}.html"
     _render_html(files, hints, proposals, scope_meta, out_path)
 
+    # Build the annotated md mirror — agent reads this single file to recover
+    # entry id + block boundaries without re-parsing the original markdown.
+    blocks_by_fs, flat_blocks = _collect_blocks(files)
+    annotated_md_path = review_dir / f"entries_{scope_meta['generated_at']}.annotated.md"
+    _render_annotated_md(files, blocks_by_fs, scope_meta, annotated_md_path)
+
     entry_index = []
     for entry_id, f, s, e in _flatten_entries(files):
         entry_index.append({
@@ -351,17 +651,22 @@ def command_prepare(args):
         "mode": "prepare",
         "review_html": str(out_path),
         "open_url": f"file://{out_path}",
+        "annotated_md": str(annotated_md_path),
+        "annotated_md_open": f"file://{annotated_md_path}",
         "scope": scope_meta,
         "entry_count": len(entry_index),
         "entries": entry_index,
         "section_count": len(section_index),
         "sections": section_index,
+        "block_count": len(flat_blocks),
+        "blocks": flat_blocks,
         "proposal_count": len(proposals),
         "next_steps": [
-            "1) Read entries + sections above and decide what semantic 'fixes' to propose (e.g. 'reset unsorted.md', 'drop the demo asset list in overview', 'remove section X').",
-            "2) Re-run prepare with --proposals-json or --proposals-file to bake proposal cards into the HTML.",
-            "3) Tell the user to open open_url; default each proposal accept/reject; expand to inspect; export plan.json.",
-            "4) When plan.json is downloaded, run: dev-memory tidy apply --plan-file <path>.",
+            "1) Read annotated_md (single Read) to recover entry id + block boundaries + orphan paragraph markers — don't re-read the raw .md files for structure.",
+            "2) Decide semantic 'fixes' to propose. Prefer `delete-block` over per-entry `delete-entries` when removing a full semantic unit (block ids are in `blocks[]`).",
+            "3) Re-run prepare with --proposals-json or --proposals-file to bake proposal cards into the HTML.",
+            "4) Tell the user to open open_url; default each proposal accept/reject; expand to inspect; export plan.json.",
+            "5) When plan.json is downloaded, run: dev-memory tidy apply --plan-file <path>.",
         ],
     }, ensure_ascii=False, indent=2))
     return 0
@@ -473,6 +778,136 @@ def _rewrite_file(path, plan_actions_by_section):
     path.write_text(join_sections(prefix, new_sections), encoding="utf-8")
 
 
+def _delete_blocks_from_section(body, block_indices):
+    """Re-parse the section body into blocks (source of truth at apply
+    time — block_idx from prepare is informational) and drop the listed
+    block_indices, returning the rewritten body. Block deletion takes the
+    block's full raw_lines: top-level bullet + any sub-bullets + absorbed
+    orphan paragraphs."""
+    blocks = _parse_blocks(body)
+    drop = {i for i in block_indices if 0 <= i < len(blocks)}
+    invalid = [i for i in block_indices if i not in drop]
+
+    # Strategy: replay the original body line-by-line, skipping lines that
+    # belong to a dropped block. Because raw_lines is captured verbatim
+    # from the body during parsing, we can identify the lines by their
+    # position within the body.
+    #
+    # _parse_blocks consumes lines in order; rebuild by walking the same
+    # loop and emitting lines for kept blocks only.
+    lines = body.splitlines()
+    # Re-derive line ownership: walk lines and mark which (if any) block
+    # each line ends up in, using the same logic as _parse_blocks. To
+    # avoid duplicating that logic, fall back to a simpler approach —
+    # re-walk lines and check membership against block raw_lines by index
+    # within the body.
+    #
+    # Trick: every raw line in a block's raw_lines is a verbatim slice of
+    # the original lines list in order. Concatenate kept blocks' raw_lines
+    # plus an explicit blank between them.
+    kept_blocks = [b for i, b in enumerate(blocks) if i not in drop]
+    if not kept_blocks:
+        # Section emptied — preserve any pre-bullet prose if present, else
+        # fall back to the placeholder so capture's
+        # _section_is_placeholder_only still detects it.
+        prefix_lines = []
+        for raw in lines:
+            stripped = raw.strip()
+            if stripped.startswith("- ") and not (raw.startswith(" ") or raw.startswith("\t")):
+                break
+            prefix_lines.append(raw)
+        while prefix_lines and not prefix_lines[-1].strip():
+            prefix_lines.pop()
+        rebuilt = "\n".join(prefix_lines).strip()
+        return (rebuilt + "\n\n- 待补充").strip() if rebuilt else "- 待补充", invalid
+
+    # Walk original lines, emit only those belonging to kept blocks or to
+    # the pre-bullet prefix. To know "belongs to a kept block", track block
+    # boundaries by replaying the parser inline.
+    keep_idx_set = {i for i in range(len(blocks)) if i not in drop}
+    out_lines = []
+    cur_block_idx = -1  # which block index we're currently inside (-1 = prefix)
+    pending_blank = False
+    in_block = False
+    saw_first_bullet = False
+
+    # Helper: emit prefix lines (before any bullet).
+    for raw in lines:
+        stripped = raw.strip()
+        if not saw_first_bullet:
+            # Prefix region — emit until we hit the first top-level bullet.
+            if stripped.startswith("- ") and not (raw.startswith(" ") or raw.startswith("\t")):
+                saw_first_bullet = True
+                cur_block_idx = 0
+                if cur_block_idx in keep_idx_set:
+                    out_lines.append(raw)
+                    in_block = True
+                else:
+                    in_block = False
+                continue
+            out_lines.append(raw)
+            continue
+
+        # We're past the first bullet — emit only if current block is kept.
+        if stripped.startswith("- ") and not (raw.startswith(" ") or raw.startswith("\t")):
+            # New top-level bullet → advance block idx.
+            cur_block_idx += 1
+            in_block = cur_block_idx in keep_idx_set
+            if in_block:
+                # If pending_blank was set inside a kept context, emit it now.
+                out_lines.append(raw)
+            pending_blank = False
+            continue
+
+        if not stripped:
+            # Blank line: emit if we're inside a kept block — but mark
+            # pending so we drop it if the block ends and goes elsewhere.
+            if in_block:
+                out_lines.append(raw)
+            continue
+
+        if in_block:
+            out_lines.append(raw)
+        # else: drop — line belongs to a deleted block (sub-bullet, orphan
+        # paragraph, etc.).
+
+    # Trim trailing blanks.
+    while out_lines and not out_lines[-1].strip():
+        out_lines.pop()
+    rebuilt = "\n".join(out_lines).strip()
+    if not rebuilt:
+        return "- 待补充", invalid
+    return rebuilt, invalid
+
+
+def _rewrite_file_delete_blocks(path, blocks_by_section):
+    """Apply delete-block actions to a single file. blocks_by_section is
+    {section_idx: set(block_idx)}. Returns list of invalid block_idx values
+    (those out of range after re-parsing)."""
+    content = path.read_text(encoding="utf-8")
+    prefix, sections = split_sections(content)
+    invalid_all = []
+    new_sections = []
+    for section_idx, (title, body) in enumerate(sections):
+        drops = blocks_by_section.get(section_idx)
+        if not drops:
+            new_sections.append((title, body))
+            continue
+        if AUTO_START in body and AUTO_END in body:
+            head_end = body.index(AUTO_START)
+            head = body[:head_end].rstrip()
+            tail = body[head_end:]
+            new_head, invalid = _delete_blocks_from_section(head, drops)
+            new_body = (new_head + "\n\n" + tail).strip()
+        else:
+            new_body, invalid = _delete_blocks_from_section(body, drops)
+        if invalid:
+            invalid_all.extend([(section_idx, i) for i in invalid])
+        new_sections.append((title, new_body))
+    path.write_text(join_sections(prefix, new_sections), encoding="utf-8")
+    return invalid_all
+
+
 def _delete_sections(path, section_indices):
     """Drop the listed top-level (`## `) sections from a file."""
     content = path.read_text(encoding="utf-8")
@@ -501,9 +936,11 @@ def command_apply(args):
     # Bucket the actions:
     #   reset_files  : file_keys to fully reset (highest precedence)
     #   delete_sections: file_key -> set(section_idx)
+    #   delete_blocks: file_key -> section_idx -> set(block_idx)
     #   entry_actions: file_key -> section_idx -> entry_idx -> {action, new_text}
     reset_files = set()
     delete_sections = {}
+    delete_blocks = {}
     entry_actions = {}
     invalid = []
 
@@ -530,6 +967,18 @@ def command_apply(args):
                     invalid.append({"action": item, "reason": "section_idx must be int"})
                     continue
                 delete_sections.setdefault(fk, set()).add(sidx)
+                continue
+            if atype == "delete-block":
+                bid = (item.get("block_id") or "").strip()
+                parsed = _parse_block_id(bid)
+                if parsed is None:
+                    invalid.append({"action": item, "reason": f"malformed block_id {bid!r}"})
+                    continue
+                fk, sidx, bidx = parsed
+                if fk not in paths:
+                    invalid.append({"action": item, "reason": f"unknown file_key {fk!r}"})
+                    continue
+                delete_blocks.setdefault(fk, {}).setdefault(sidx, set()).add(bidx)
                 continue
             if atype in ("delete-entries", "edit-entries"):
                 # Either form expands to a list of {id, action[, new_text]}.
@@ -590,6 +1039,7 @@ def command_apply(args):
             invalid.append({"file_key": fk, "op": "reset-file", "reason": str(exc)})
         # Drop any other ops queued for this file — reset wins.
         delete_sections.pop(fk, None)
+        delete_blocks.pop(fk, None)
         entry_actions.pop(fk, None)
 
     # Then delete-section per file (one rewrite per file).
@@ -600,12 +1050,65 @@ def command_apply(args):
             continue
         _delete_sections(path, sidx_set)
         rewritten.append({"file_key": fk, "path": str(path), "op": f"delete-sections:{sorted(sidx_set)}"})
-        # Entry actions on a deleted section are no-ops; prune to keep counts honest.
+        # Block / entry actions targeting these sections are no-ops; prune.
+        if fk in delete_blocks:
+            for sidx in sidx_set:
+                delete_blocks[fk].pop(sidx, None)
+            if not delete_blocks[fk]:
+                delete_blocks.pop(fk, None)
         if fk in entry_actions:
             for sidx in sidx_set:
                 entry_actions[fk].pop(sidx, None)
             if not entry_actions[fk]:
                 entry_actions.pop(fk, None)
+
+    # Then delete-block per file. We re-parse blocks at apply time (prepare's
+    # block_idx is informational); out-of-range block ids land in `invalid`.
+    # Also prune entry-actions that would fall inside a deleted block so we
+    # don't double-touch lines that are already gone.
+    for fk, sec_blocks in delete_blocks.items():
+        path = paths.get(fk)
+        if not path or not path.exists():
+            invalid.append({"file_key": fk, "op": "delete-block", "reason": "file missing"})
+            continue
+        # Prune entry-actions that fall inside doomed blocks before we delete.
+        if fk in entry_actions:
+            content = path.read_text(encoding="utf-8")
+            _, sections = split_sections(content)
+            for sidx, bidx_set in sec_blocks.items():
+                if sidx >= len(sections):
+                    continue
+                body = sections[sidx][1]
+                cleaned = _strip_auto_block(body)
+                blks = _parse_blocks(cleaned)
+                doomed_entry_idx = set()
+                for bidx in bidx_set:
+                    if 0 <= bidx < len(blks):
+                        s, e = blks[bidx]["entry_idx_range"]
+                        for k in range(s, e + 1):
+                            doomed_entry_idx.add(k)
+                if sidx in entry_actions[fk]:
+                    for k in list(entry_actions[fk][sidx].keys()):
+                        if k in doomed_entry_idx:
+                            entry_actions[fk][sidx].pop(k, None)
+                    if not entry_actions[fk][sidx]:
+                        entry_actions[fk].pop(sidx, None)
+            if not entry_actions[fk]:
+                entry_actions.pop(fk, None)
+        invalid_blocks = _rewrite_file_delete_blocks(path, sec_blocks)
+        for sidx, bidx in invalid_blocks:
+            invalid.append({
+                "op": "delete-block",
+                "file_key": fk,
+                "section_idx": sidx,
+                "block_idx": bidx,
+                "reason": "block_idx out of range after re-parse",
+            })
+        rewritten.append({
+            "file_key": fk,
+            "path": str(path),
+            "op": f"delete-blocks:{ {k: sorted(v) for k, v in sec_blocks.items()} }",
+        })
 
     # Finally entry-level actions.
     for fk, sec_actions in entry_actions.items():
@@ -714,7 +1217,7 @@ def main():
         "--proposals-json",
         help="Inline JSON array of proposals: [{id, title, reason, actions:[...]}]. "
              "Action types: delete-entries (ids:[...]), delete-section (file_key, section_idx), "
-             "reset-file (file_key), edit-entries (edits:[{id, new_text}]).",
+             "delete-block (block_id), reset-file (file_key), edit-entries (edits:[{id, new_text}]).",
     )
     proposal_group.add_argument("--proposals-file", help="Path to JSON file with the same shape as --proposals-json")
 
