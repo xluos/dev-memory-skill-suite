@@ -65,6 +65,7 @@ dev-memory branch rename --source A --target B [--backup | --force]
 dev-memory branch fork   --source A --target B [--backup | --force]
 dev-memory branch delete [--branch X]                [--backup | --force]
 dev-memory branch init   [--branch X]                [--backup | --force]
+dev-memory branch inherit-worktree-base [--source NAME] [--backup | --force]
 ```
 
 破坏性操作三档冲突处理：
@@ -74,6 +75,21 @@ dev-memory branch init   [--branch X]                [--backup | --force]
 - **`--force`**：直接覆盖；自动写一份 `/tmp/dev-memory-force-backup/<repo-key>/<branch-key>-<UTC>/` 安全网，跨重启 macOS 会清，但同会话内误操作可恢复
 
 `fork` / `rename` 自动重写 5 个 markdown 里的"## 分支"机械字段为新分支名，重置 `progress.md` 的 auto-sync 区为占位（让下次 SessionStart 重生成），并在 `overview.md` 头部插入"## 分支起源"块记录来源分支与时间。用户自由文本里出现的源分支名不动 —— 那是真实历史叙事，改了反而破坏因果。
+
+### Worktree 首次进入自动继承源分支记忆（0.17.3 起）
+
+`git worktree add -b feat/x ../wt-x master` 这类场景下，新分支 `feat/x` 是从 `master` 拉出来开的新任务，但之前的 v2 架构里新 worktree 进入会落一个空骨架，`master` 上累积的决策 / 风险 / 术语都丢了。0.17.3 起在 lazy-init 阶段：
+
+1. 检测当前 checkout 是 linked worktree（`--git-dir` 与 `--git-common-dir` 不一致）
+2. 读 `git reflog show --format=%gs <current-branch>` 最旧一条，匹配 `branch: Created from X` 拿到源分支名
+3. 校验源分支是真实本地 ref、且对应记忆目录存在且非空骨架
+4. `shutil.copytree` 整份记忆 → 新分支目录，复用 `fork` 的机械字段重写 + 在 `overview.md` 头部插入 `## 分支起源 · auto-inherited (worktree) from X`，manifest 的 `provenance` 追加 `op: worktree-inherit`
+
+兜底与边界：
+
+- 任意一步推不出（脱离 `worktree add -b` 写法、reflog 滚动丢失、源记忆是空骨架）→ 静默回退到原空骨架行为，不阻塞
+- 环境变量 `DEV_MEMORY_DISABLE_WORKTREE_INHERIT=1` 全局关闭
+- 已经开过会话的 worktree 想后补 → 显式跑 `dev-memory branch inherit-worktree-base`（支持 `--source` 覆盖 reflog 探测）
 
 ### Graduate 为什么必须显式
 

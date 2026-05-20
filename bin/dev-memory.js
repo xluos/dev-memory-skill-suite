@@ -522,6 +522,8 @@ function commandBranch(rawArgs) {
   dev-memory branch fork   --source A --target B [--force | --backup]
   dev-memory branch delete [--branch NAME] [--force | --backup]
   dev-memory branch init   [--branch NAME] [--force | --backup]
+  dev-memory branch inherit-worktree-base [--source NAME] [--branch NAME] [--force | --backup]
+                                             # explicit worktree-base inheritance (auto-fires on first lazy-init)
 `);
       return;
     }
@@ -544,7 +546,7 @@ function printHelp() {
   dev-memory setup <init|merge-unsorted|mark-completed> [...]
   dev-memory graduate <dry-run|apply|index> [...]
   dev-memory tidy <prepare|apply> [...]
-  dev-memory branch [list|inspect|rename|fork|delete|init] [...]   # no subcommand = interactive
+  dev-memory branch [list|inspect|rename|fork|delete|init|inherit-worktree-base] [...]   # no subcommand = interactive
 
 Environment:
   DEV_MEMORY_ROOT defaults to ${DEFAULT_STORAGE_ROOT}

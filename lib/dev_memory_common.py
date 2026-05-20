@@ -94,6 +94,81 @@ def detect_branch(repo_root):
     return branch
 
 
+def detect_git_dir(repo_root):
+    return git_stdout(["rev-parse", "--git-dir"], cwd=repo_root, check=False)
+
+
+def detect_git_common_dir(repo_root):
+    return git_stdout(["rev-parse", "--git-common-dir"], cwd=repo_root, check=False)
+
+
+def is_worktree(repo_root):
+    """True iff this checkout is a linked worktree (not the main repo).
+
+    Distinguishes the two by comparing --git-dir (per-worktree, e.g.
+    .git/worktrees/<name>) against --git-common-dir (shared, e.g. .git).
+    Older git versions print --git-common-dir as '.' when they're equal —
+    that's fine, the resolve() below normalizes both.
+    """
+    gd = detect_git_dir(repo_root)
+    gcd = detect_git_common_dir(repo_root)
+    if not gd or not gcd:
+        return False
+    base = Path(repo_root)
+    gd_path = Path(gd)
+    gcd_path = Path(gcd)
+    gd_abs = (gd_path if gd_path.is_absolute() else base / gd_path).resolve()
+    gcd_abs = (gcd_path if gcd_path.is_absolute() else base / gcd_path).resolve()
+    return gd_abs != gcd_abs
+
+
+_REFLOG_CREATED_FROM_RE = re.compile(r"branch:\s*Created from\s+(\S+)")
+
+
+def detect_worktree_base_branch(repo_root, branch_name):
+    """Best-effort: which branch was `branch_name` created from?
+
+    Reads the oldest reflog entry of `branch_name` — for `git worktree add -b X
+    path Y`, `git checkout -b X Y`, or `git switch -c X Y`, this entry reads
+    `branch: Created from Y`. Returns Y if it exists as a local branch ref and
+    differs from current; otherwise None (callers should fall back to seeding
+    a fresh skeleton).
+
+    Limitations:
+    - If the worktree was created without an explicit source (e.g. `worktree
+      add -b X path` defaults to HEAD), the reflog shows `Created from HEAD`
+      and we return None — we can't reliably resolve which branch HEAD was
+      pointing at at creation time.
+    - If branch_name has been amended/rebased enough that the oldest reflog
+      entry rolled off, we return None.
+    """
+    result = run_git(
+        ["reflog", "show", "--format=%gs", branch_name],
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    oldest = lines[-1]
+    m = _REFLOG_CREATED_FROM_RE.search(oldest)
+    if not m:
+        return None
+    src = m.group(1).strip()
+    if not src or src == "HEAD" or src == branch_name:
+        return None
+    verify = run_git(
+        ["rev-parse", "--verify", "--quiet", f"refs/heads/{src}"],
+        cwd=repo_root,
+        check=False,
+    )
+    if verify.returncode != 0:
+        return None
+    return src
+
+
 def sanitize_branch_name(branch_name):
     cleaned = branch_name.strip().replace("/", "__")
     cleaned = cleaned.replace(" ", "-")
@@ -1005,6 +1080,66 @@ def initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key
     return paths
 
 
+def _inherit_from_worktree_base(repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir):
+    """If this checkout is a linked worktree whose branch was just created
+    from another branch that already has substantive memory, copy that memory
+    dir into the new branch's slot before lazy-init seeds an empty skeleton.
+
+    Idempotent + side-effect-free no-op when:
+    - DEV_MEMORY_DISABLE_WORKTREE_INHERIT env is set (escape hatch)
+    - no_git mode (branch_name is None)
+    - not a worktree (main repo / standalone clone)
+    - reflog doesn't reveal a base branch
+    - the resolved base branch's memory dir is missing or skeleton-only
+    - the new branch's memory dir somehow already exists
+
+    Returns the source branch name on success; None on no-op. The caller still
+    runs `initialize_assets` afterwards, which is idempotent — it'll only fill
+    in files the inherited tree didn't already have.
+    """
+    if os.environ.get("DEV_MEMORY_DISABLE_WORKTREE_INHERIT", "").strip():
+        return None
+    if branch_name is None:
+        return None
+    if branch_dir.exists():
+        return None
+    try:
+        if not is_worktree(repo_root):
+            return None
+    except Exception:
+        return None
+    source_name = detect_worktree_base_branch(repo_root, branch_name)
+    if not source_name:
+        return None
+    source_key = sanitize_branch_name(source_name)
+    if source_key == branch_key:
+        return None
+    source_dir = repo_dir / "branches" / source_key
+    if not source_dir.exists() or not source_dir.is_dir():
+        return None
+    # Defer skeleton check + fork mechanics to the branch CLI module so the
+    # provenance stamp / metadata rewrite stays in one place. Lazy import to
+    # avoid a circular dependency at module load.
+    try:
+        from dev_memory_branch import (
+            inspect_branch_dir,
+            _rewrite_branch_metadata,
+            _rewrite_manifest,
+            _stamp_overview_provenance,
+        )
+    except Exception:
+        return None
+    snap = inspect_branch_dir(source_dir, source_name)
+    if not snap.get("exists") or snap.get("is_skeleton"):
+        return None
+    branch_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(str(source_dir), str(branch_dir))
+    _rewrite_manifest(branch_dir, branch_name, source_branch_name=source_name, op="worktree-inherit")
+    _rewrite_branch_metadata(branch_dir, branch_name)
+    _stamp_overview_provenance(branch_dir, source_name, "worktree-inherit")
+    return source_name
+
+
 def ensure_branch_paths_exist(repo, context_dir=None, branch=None):
     """Lazy-init entrypoint. Returns the same tuple as get_branch_paths() plus
     a `paths` dict, creating the directory + v2 file skeleton if missing.
@@ -1017,6 +1152,9 @@ def ensure_branch_paths_exist(repo, context_dir=None, branch=None):
         repo, context_dir, branch
     )
     if not branch_dir.exists():
+        _inherit_from_worktree_base(
+            repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir,
+        )
         initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir)
     else:
         # Branch dir exists but may be v1 — run the migration silently.

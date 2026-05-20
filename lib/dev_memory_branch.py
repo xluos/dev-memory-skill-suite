@@ -33,9 +33,11 @@ from dev_memory_common import (
     detect_branch,
     detect_repo_identity,
     detect_repo_root,
+    detect_worktree_base_branch,
     ensure_branch_paths_exist,
     get_storage_root,
     git_lines,
+    is_worktree,
     now_iso,
     read_json,
     sanitize_branch_name,
@@ -444,12 +446,15 @@ PROVENANCE_HEADER = "## 分支起源"
 
 
 def _provenance_block(source_branch_name, op):
-    verb = "forked" if op == "fork" else "renamed"
-    suffix = (
-        "原分支保留；本分支为独立延伸"
-        if op == "fork"
-        else "原分支已不存在（仅改名）"
-    )
+    if op == "rename":
+        verb = "renamed"
+        suffix = "原分支已不存在（仅改名）"
+    elif op == "worktree-inherit":
+        verb = "auto-inherited (worktree)"
+        suffix = "Worktree 首次 lazy-init 时自动从源分支拉取记忆；源分支保留"
+    else:
+        verb = "forked"
+        suffix = "原分支保留；本分支为独立延伸"
     return (
         f"{PROVENANCE_HEADER}\n\n"
         f"- {verb} from `{source_branch_name}` at {now_iso()}\n"
@@ -674,6 +679,87 @@ def cmd_init(args):
 
 
 # ---------------------------------------------------------------------------
+# inherit-worktree-base
+# ---------------------------------------------------------------------------
+
+def cmd_inherit_worktree_base(args):
+    """Explicit user-triggered worktree memory inheritance.
+
+    Mirrors what lazy-init does automatically on first touch, but usable
+    *after* the worktree session already started (auto-inherit only fires
+    when branch_dir didn't yet exist). Detects the source branch from reflog
+    by default; --source overrides.
+
+    Conflict handling on a non-empty target follows the same flags as fork:
+    --backup (recommended), --force, default abort.
+    """
+    repo_root = detect_repo_root(args.repo or ".")
+    storage_root = get_storage_root(repo_root, args.context_dir)
+    identity = detect_repo_identity(repo_root)
+    target_name = args.branch or detect_branch(repo_root)
+    target_dir, target_key = _branch_dir_for(repo_root, target_name, storage_root, identity)
+
+    in_worktree = False
+    try:
+        in_worktree = is_worktree(repo_root)
+    except Exception:
+        in_worktree = False
+    if not in_worktree and not args.allow_non_worktree:
+        raise RuntimeError(
+            f"'{repo_root}' is not a linked worktree. Pass --allow-non-worktree "
+            f"if you really want to inherit memory into a main-repo checkout."
+        )
+
+    source_name = args.source or detect_worktree_base_branch(repo_root, target_name)
+    if not source_name:
+        raise RuntimeError(
+            f"could not auto-detect the base branch for '{target_name}' from reflog. "
+            f"Pass --source <branch> explicitly. (Common cause: the worktree was "
+            f"created without -b, or the reflog rolled off.)"
+        )
+    if source_name == target_name:
+        raise ValueError("source and target are identical")
+
+    source_dir, source_key = _branch_dir_for(repo_root, source_name, storage_root, identity)
+    source_snapshot = inspect_branch_dir(source_dir, source_name)
+    if not source_snapshot["exists"]:
+        raise ValueError(f"source branch '{source_name}' has no memory dir at {source_dir}")
+    if source_snapshot["is_skeleton"] and not args.allow_empty_source:
+        raise ValueError(
+            f"source branch '{source_name}' is an empty skeleton — nothing to inherit. "
+            f"Pass --allow-empty-source to proceed anyway."
+        )
+
+    target_snapshot = inspect_branch_dir(target_dir, target_name)
+    abort_reason, safety = _resolve_conflict(
+        target_dir, target_snapshot, _resolve_conflict_mode(args), identity["repo_key"],
+    )
+    if abort_reason:
+        raise RuntimeError(abort_reason)
+
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(str(source_dir), str(target_dir))
+    _rewrite_manifest(target_dir, target_name, source_branch_name=source_name, op="worktree-inherit")
+    _rewrite_branch_metadata(target_dir, target_name)
+    _stamp_overview_provenance(target_dir, source_name, "worktree-inherit")
+
+    result = {
+        "op": "inherit-worktree-base",
+        "source": source_name,
+        "target": target_name,
+        "source_dir": str(source_dir),
+        "target_dir": str(target_dir),
+        "source_branch_key": source_key,
+        "target_branch_key": target_key,
+        "source_detected_via": "reflog" if not args.source else "user",
+    }
+    if safety:
+        result["force_safety_backup"] = str(safety)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argparse wiring
 # ---------------------------------------------------------------------------
 
@@ -726,6 +812,26 @@ def main():
     init_p.add_argument("--force", action="store_true", help="Wipe existing content before re-creating skeleton")
     init_p.add_argument("--backup", action="store_true", help="Move existing content to _archived/ before re-creating")
 
+    inherit_p = subparsers.add_parser(
+        "inherit-worktree-base",
+        help="Copy the worktree's base-branch memory into the current branch's slot",
+    )
+    _add_common_args(inherit_p)
+    inherit_p.add_argument("--branch", help="Target branch (defaults to current)")
+    inherit_p.add_argument("--source", help="Source branch to inherit from (defaults to reflog detection)")
+    inherit_p.add_argument("--force", action="store_true", help="Overwrite target even if it already has content")
+    inherit_p.add_argument("--backup", action="store_true", help="Move existing target to _archived/ first")
+    inherit_p.add_argument(
+        "--allow-empty-source",
+        action="store_true",
+        help="Proceed even if source branch memory is an empty skeleton",
+    )
+    inherit_p.add_argument(
+        "--allow-non-worktree",
+        action="store_true",
+        help="Allow running this in the main repo checkout (not a linked worktree)",
+    )
+
     args = parser.parse_args()
     handlers = {
         "list": cmd_list,
@@ -734,6 +840,7 @@ def main():
         "fork": cmd_fork,
         "delete": cmd_delete,
         "init": cmd_init,
+        "inherit-worktree-base": cmd_inherit_worktree_base,
     }
     try:
         return handlers[args.command](args) or 0
