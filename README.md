@@ -44,6 +44,20 @@ Capture 有三种写入模式：
 - 累积型（decision / risk / glossary）默认 **append**，新条目不覆盖旧的
 - 快照型（progress / next / overview / scope / stage / constraint）默认 **upsert**，始终反映最新状态
 
+### Capture dedup check（0.18 起）
+
+append 类 kind 写入前会对目标 section 做相似度查重，阻止 append-only 累积矛盾决策（典型场景：6 天里"5/14 旧版"+"5/15 修正"+"5/19 再修正"三层叠加互相矛盾）。
+
+- **算法**：`difflib.SequenceMatcher` 比 first non-empty line 前 80 字符；中文 supersedes 关键词（`重新校正 / 已更新 / 推翻 / 取代` 等）+0.15 boost
+- **阈值**：similarity ≥ 0.7 视为疑似重复
+- **行为**：命中拦下不写，`exit 2`，stdout 返 `dedup_hint` 含 `matches[]` + `recommendation`（`update_existing` / `review_and_decide`）
+- **agent 处理**：按 recommendation 分流：
+  - 修订旧条目 → `dev-memory capture rewrite-entry --id <match_id> --content <text>`（新 subcommand）
+  - 确实是独立新事实 → `dev-memory capture record --force ...`（绕过查重）
+  - 误判同义 / 暂不写 → 不调任何命令
+- **绕过**：`--force` flag；upsert 类 kind（progress / next / overview / scope / stage / constraint）天然跳过 dedup
+- **批量**：`--summary-json` 每条独立 check，blocked 项进 stdout `dedup_blocked[]`，未 blocked 部分照常写
+
 ### Setup vs Tidy vs Graduate（三个整理动作的边界）
 
 | 命令 | 输入状态 | 输出状态 | 主要动作 |
@@ -53,6 +67,13 @@ Capture 有三种写入模式：
 | `graduate` | 分支完成 | 跨分支知识上提 + 归档 branch 目录 | 提炼 + 归档 |
 
 三个互不替代：tidy 不分类、不归档、不跨分支提炼；setup 不删、不重写；graduate 不动单分支内的 stale 条目。`tidy` 工作流是 agent 把相关条目聚合成"事项级 proposal"（如"清掉 demo 资产列表" / "重置 unsorted.md" / "删除整个 v1 残留 section"），生成静态 HTML 让用户对每个 proposal 选 accept / reject / custom（写自由文本反馈），导出 plan.json 后 apply；apply 永远先把整个 scope 备份到 `branches/<branch>/tidy_backup_<ts>/`。
+
+**0.18 起的 tidy 改进**：
+
+- `prepare` 多输出一份 `entries.annotated.md` 镜像 —— 原 markdown 结构 + 每个 top-level bullet 行末贴 `<!-- id: ... -->` 注释 + block 边界注释 + 不在 entry 内的 bold paragraph 标 `<!-- orphan: paragraph -->`。agent 读这一份就能同时拿到语义结构 + 所有 id 映射，不用读两次（解决"JSON 把 markdown 拍扁丢上下文"问题）
+- 新 action `delete-block`：把 top bullet + 缩进子树 + 紧跟的 `**Why:**` / `**How to apply:**` bold paragraph 聚成一个语义单元整体删，自动吸附 orphan paragraph
+- action 优先级 `reset-file > delete-section > delete-block > delete-entries / edit-entries`，apply 时高优先级覆盖低优先级
+- `delete-block` 的 block_id 在 apply 时**重新解析**当前文件结构定位（不依赖 prepare 时的快照），文件中途被改不误删邻块
 
 ### 分支记忆生命周期（0.14 起新增 CLI）
 
@@ -255,9 +276,9 @@ CLI 暴露的子命令：
 | 安装助手 | `dev-memory install-hooks <codex\|claude\|--all>` | 把 hook 模板合并到目标配置 |
 | 浏览器 UI | `dev-memory ui [--port N] [--read-only]` | 启动本地浏览器界面看/编辑记忆 |
 | 分支生命周期 | `dev-memory branch [list\|inspect\|rename\|fork\|delete\|init]` | 分支记忆迁移 / 副本 / 重置（无参数 = 交互式 type-ahead）|
-| Skill 工作流（agent 在 SKILL.md 里调用，也能手动跑）| `dev-memory capture <record\|show\|suggest-kind\|...>` | 统一写入入口 |
+| Skill 工作流（agent 在 SKILL.md 里调用，也能手动跑）| `dev-memory capture <record\|rewrite-entry\|show\|suggest-kind\|...>` | 统一写入入口（含 0.18 起的 dedup 拦截 + rewrite-entry） |
 | | `dev-memory setup <init\|merge-unsorted\|mark-completed>` | 整理 unsorted |
-| | `dev-memory tidy <prepare\|apply>` | 浏览器化的批量 review + 落盘 |
+| | `dev-memory tidy <prepare\|apply>` | 浏览器化的批量 review + 落盘（0.18 起含 annotated md + delete-block）|
 | | `dev-memory graduate <dry-run\|apply\|index>` | 分支归档 + 跨分支知识上提 |
 | 内部（hook 用，也能手动）| `dev-memory context <show\|sync>` | 输出 paths JSON / 刷新 progress.md auto 区。0.17 起不再以 skill 形式暴露，CLI 命令保留 |
 
