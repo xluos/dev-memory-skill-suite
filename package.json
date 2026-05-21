@@ -3,6 +3,14 @@
   "version": "0.18.1",
   "description": "CLI for dev-memory hooks and repo-local setup (formerly @xluos/dev-assets-cli)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xluos/dev-memory-skill-suite.git"
+  },
+  "homepage": "https://github.com/xluos/dev-memory-skill-suite#readme",
+  "bugs": {
+    "url": "https://github.com/xluos/dev-memory-skill-suite/issues"
+  },
   "scripts": {
     "check": "node scripts/npm/check-package.mjs",
     "build": "node scripts/npm/build-package.mjs",
