@@ -1,0 +1,84 @@
+name: Release
+
+# Triggered when a vX.Y.Z tag is pushed. Runs the test suite, verifies the
+# tag matches package.json, publishes the package to npm, then creates a
+# GitHub Release with auto-generated notes.
+#
+# Manual workflow_dispatch is also wired in so you can re-run a failed
+# publish from the Actions tab without re-tagging.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.18.0). Must already exist.'
+        required: true
+
+permissions:
+  contents: write  # needed to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Resolve tag version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package.json
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${{ steps.ver.outputs.version }}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag v${TAG_VERSION} does not match package.json version ${PKG_VERSION}"
+            exit 1
+          fi
+          echo "Tag and package.json both at ${PKG_VERSION}"
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Run package check
+        run: npm run check
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
