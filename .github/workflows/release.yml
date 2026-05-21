@@ -1,27 +1,34 @@
 name: Release
 
-# Triggered when a vX.Y.Z tag is pushed. Runs the test suite, verifies the
-# tag matches package.json, publishes the package to npm, then creates a
-# GitHub Release with auto-generated notes.
+# Fires when a `vX.Y.Z` tag is pushed (e.g. `git tag v0.18.1 && git push --tags`).
+# Runs pytest, verifies tag matches package.json, then publishes to npm via the
+# package's Trusted Publisher configuration on npmjs.com — no long-lived
+# NPM_TOKEN. GitHub mints a short-lived OIDC token at run time, npm verifies
+# the configured (repo, workflow) pair, and the published artifact carries a
+# provenance attestation users can verify.
 #
-# Manual workflow_dispatch is also wired in so you can re-run a failed
-# publish from the Actions tab without re-tagging.
+# workflow_dispatch is also wired in so you can re-run a failed publish from
+# the Actions tab using an existing tag (no retag needed).
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v0.18.0). Must already exist.'
+        description: 'Existing tag to re-publish (e.g. v0.18.0)'
         required: true
 
 permissions:
-  contents: write  # needed to create the GitHub Release
+  # `contents: write` lets softprops/action-gh-release create the GitHub
+  # release. `id-token: write` is what mints the OIDC token npm uses for
+  # trusted-publisher auth + provenance.
+  contents: write
+  id-token: write
 
 jobs:
-  release:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -33,7 +40,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # OIDC trusted-publisher auth needs npm >= 11.5.1, which only
+          # ships with Node 22.14.0+. Pinning to Node 24 (the version the
+          # npm docs example uses) keeps us safely above that. Without
+          # this, `npm publish` signs the provenance fine but falls back
+          # to a non-OIDC publish path and the registry returns PUT 404.
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Setup Python
@@ -50,7 +62,7 @@ jobs:
           if [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
-            TAG="${GITHUB_REF#refs/tags/}"
+            TAG="${GITHUB_REF_NAME}"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
@@ -72,11 +84,12 @@ jobs:
         run: npm run check
 
       - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Auth is OIDC via the package's Trusted Publisher entry (no
+        # NODE_AUTH_TOKEN). `--provenance` is what triggers the OIDC
+        # exchange with npm and emits the signed attestation.
+        run: npm publish --provenance --access public
 
-      - name: Create GitHub Release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
