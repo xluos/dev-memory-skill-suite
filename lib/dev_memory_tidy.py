@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dev_memory_common import (
     AUTO_END,
     AUTO_START,
+    append_log_event,
     ensure_branch_paths_exist,
     join_sections,
     split_sections,
@@ -87,7 +88,19 @@ REPO_FILE_KEYS = (
     "repo_glossary",
 )
 
-VALID_HINTS = {"STALE", "DUP", "OK", "UNCLEAR"}
+VALID_HINTS = {"STALE", "DUP", "OK", "UNCLEAR", "ORPHAN"}
+
+# Default age (days) past which a file is considered "untouched" — entries
+# inside such files get auto-tagged with hint=STALE so the user reviews them.
+# Pulled from log.md's per-action timestamps. Tunable via the CLI flag
+# `--stale-after-days`; the default is conservative because false STALEs
+# annoy users more than missed ones.
+AUTO_STALE_THRESHOLD_DAYS = 30
+
+# Minimum token length for ORPHAN detection. Shorter tokens (e.g. "API",
+# "git") match too much across the codebase and produce false negatives —
+# the hint becomes useless. Tunable but rarely worth it.
+AUTO_ORPHAN_MIN_TOKEN_LEN = 4
 VALID_ENTRY_ACTIONS = {"keep", "delete", "edit"}
 VALID_PROPOSAL_TYPES = {"delete-entries", "delete-section", "reset-file", "edit-entries", "delete-block"}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3", "P4"}
@@ -620,6 +633,226 @@ def _render_html(files, hints, proposals, scope_meta, output_path):
     output_path.write_text(rendered, encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Auto-hint generators (Karpathy lint pattern)
+# ---------------------------------------------------------------------------
+#
+# tidy prepare can run two cheap "positive-signal" passes that bake hints into
+# the review payload before the user opens the HTML:
+#
+#   - STALE-by-log : files whose last log.md mention is older than the
+#                    configured threshold get their entries hinted STALE.
+#                    Pulls timestamps + targets from log.md, so it costs one
+#                    file read + a regex scan; no external state.
+#   - ORPHAN-glossary : glossary entries whose key phrase doesn't appear
+#                       anywhere else in the wiki get hinted ORPHAN — the
+#                       term is dangling, not load-bearing.
+#
+# Both signals are intentionally conservative — false positives waste user
+# attention more than misses. ORPHAN skips tokens shorter than
+# AUTO_ORPHAN_MIN_TOKEN_LEN (short tokens like "API"/"hook" match too much
+# elsewhere); STALE only fires when log.md has a timestamp, never on
+# "file never seen" (cold-start would carpet-bomb the UI).
+
+
+# Reverse of capture's _label(): "branch/decisions.md" / "repo/glossary.md"
+# → file_key. Order matters: pending-promotion has a custom shape, repo_*
+# prefix wins over branch/, and we tolerate the `(mode)` trailer.
+def _file_label_to_key(label):
+    if not label:
+        return None
+    label = label.strip()
+    paren = label.find("(")
+    if paren > 0:
+        label = label[:paren].strip()
+    if label == "branch/pending-promotion.md":
+        return "pending_promotion"
+    if label.startswith("repo/") and label.endswith(".md"):
+        return "repo_" + label[len("repo/"):-len(".md")]
+    if label.startswith("branch/") and label.endswith(".md"):
+        return label[len("branch/"):-len(".md")]
+    return None
+
+
+_LOG_HEADER_RE = __import__("re").compile(r"^## \[(?P<ts>[^\]]+)\]")
+_LOG_TARGETS_RE = __import__("re").compile(r"^- targets:\s*(?P<rest>.+)$")
+
+
+def _parse_log_last_touched(log_path):
+    """Return {file_key: latest_iso_timestamp} by walking log.md once.
+
+    Algorithm: a log entry block is `## [...]` followed by a few `- key:
+    value` lines until the next H2 or EOF. We only care about the `targets`
+    detail; each comma-separated file label gets its file_key resolved and
+    the block's timestamp recorded. Later timestamps for the same file_key
+    overwrite (entries are append-only so later = file position later =
+    nothing; we still compare lexicographically since ISO sorts).
+    """
+    if log_path is None or not log_path.exists():
+        return {}
+    last_seen = {}
+    current_ts = None
+    for raw in log_path.read_text(encoding="utf-8").splitlines():
+        m = _LOG_HEADER_RE.match(raw)
+        if m:
+            current_ts = m.group("ts").strip()
+            continue
+        if current_ts is None:
+            continue
+        m = _LOG_TARGETS_RE.match(raw)
+        if not m:
+            continue
+        rest = m.group("rest").strip()
+        for chunk in rest.split(","):
+            file_key = _file_label_to_key(chunk)
+            if not file_key:
+                continue
+            prev = last_seen.get(file_key)
+            if prev is None or current_ts > prev:
+                last_seen[file_key] = current_ts
+    return last_seen
+
+
+def _iso_to_age_days(iso_ts):
+    """Best-effort: parse an ISO timestamp string into "days ago" relative
+    to now. Returns None on parse failure so callers can skip cleanly."""
+    if not iso_ts:
+        return None
+    try:
+        # datetime.fromisoformat handles "+00:00" suffixes from now_iso();
+        # the Z suffix some legacy callers emit is normalized first.
+        s = iso_ts.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
+        return max(0, delta.days)
+    except (ValueError, TypeError):
+        return None
+
+
+def _stale_hints_from_log(files, log_paths, *, threshold_days):
+    """Return {entry_id: {label, reason}} for entries inside files whose log
+    last-touched age exceeds threshold_days. log_paths is an iterable of
+    branch/repo log.md paths — we union them so a file touched recently in
+    either layer is considered fresh."""
+    last_seen = {}
+    for lp in log_paths:
+        for fk, ts in _parse_log_last_touched(lp).items():
+            prev = last_seen.get(fk)
+            if prev is None or ts > prev:
+                last_seen[fk] = ts
+
+    out = {}
+    for f in files:
+        fk = f["file_key"]
+        ts = last_seen.get(fk)
+        age_days = _iso_to_age_days(ts)
+        if age_days is None or age_days < threshold_days:
+            continue
+        reason = f"log 上次提到 {age_days} 天前 (> {threshold_days})"
+        for s in f["sections"]:
+            for e in s["entries"]:
+                if e.get("is_placeholder"):
+                    continue
+                eid = _entry_id(fk, s["section_idx"], e["entry_idx"])
+                out[eid] = {"label": "STALE", "reason": reason}
+    return out
+
+
+_ORPHAN_KEY_PHRASE_TRIM_RE = __import__("re").compile(r"^[\s\-*`]+|[\s`*]+$")
+_ORPHAN_MARKDOWN_BOLD_RE = __import__("re").compile(r"\*\*([^*]+)\*\*")
+
+
+def _glossary_key_phrase(entry_text):
+    """Extract the "key phrase" of a glossary entry — the bit other files
+    would have to reference for the entry to be load-bearing.
+
+    Heuristic: take the first line, strip bullet/markdown markers, then take
+    the substring before the first `:` or `：` (half/full-width colon).
+    Falls back to the trimmed first line if no colon. Returns "" if nothing
+    extractable, so callers can skip cleanly.
+    """
+    if not entry_text:
+        return ""
+    first_line = entry_text.splitlines()[0] if entry_text else ""
+    s = first_line.strip()
+    if s.startswith(("- ", "* ")):
+        s = s[2:]
+    # Strip bold markdown wrappers if the whole token is wrapped.
+    m = _ORPHAN_MARKDOWN_BOLD_RE.match(s)
+    if m:
+        s = m.group(1) + s[m.end():]
+    for sep in (":", "："):
+        idx = s.find(sep)
+        if idx > 0:
+            s = s[:idx]
+            break
+    s = _ORPHAN_KEY_PHRASE_TRIM_RE.sub("", s).strip()
+    return s
+
+
+def _orphan_hints_from_glossary(files, paths):
+    """Return {entry_id: {label, reason}} for glossary entries whose key
+    phrase never appears in any other file in the wiki.
+
+    Why "never": we're after dangling terms, not under-referenced ones. A
+    term mentioned even once outside its definition is doing some work; an
+    entry that appears literally nowhere else is either superseded, never
+    actually used, or a private note that drifted in. Worth a user look.
+    """
+    # Build the haystack: full text of every non-glossary file in `paths`.
+    glossary_keys = {"glossary", "repo_glossary"}
+    haystack_chunks = []
+    for key, path in paths.items():
+        if key in glossary_keys:
+            continue
+        if not hasattr(path, "exists") or not path.exists():
+            continue
+        try:
+            haystack_chunks.append(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    haystack = "\n".join(haystack_chunks)
+
+    out = {}
+    for f in files:
+        if f["file_key"] not in glossary_keys:
+            continue
+        for s in f["sections"]:
+            for e in s["entries"]:
+                if e.get("is_placeholder"):
+                    continue
+                phrase = _glossary_key_phrase(e.get("text", ""))
+                if not phrase or len(phrase) < AUTO_ORPHAN_MIN_TOKEN_LEN:
+                    continue
+                if phrase in haystack:
+                    continue
+                eid = _entry_id(f["file_key"], s["section_idx"], e["entry_idx"])
+                out[eid] = {
+                    "label": "ORPHAN",
+                    "reason": f"术语 '{phrase}' 在其他文件零引用",
+                }
+    return out
+
+
+def _compute_auto_hints(files, paths, *, stale_threshold_days):
+    """Run both auto-hint passes and merge. ORPHAN wins over STALE on the
+    same entry — a never-referenced glossary term is a sharper signal than
+    "file hasn't been touched in a while" (which would tag the entire
+    glossary STALE on a cold log)."""
+    log_paths = []
+    if paths.get("log"):
+        log_paths.append(paths["log"])
+    if paths.get("repo_log") and paths.get("repo_log") != paths.get("log"):
+        log_paths.append(paths["repo_log"])
+
+    merged = _stale_hints_from_log(files, log_paths, threshold_days=stale_threshold_days)
+    orphan = _orphan_hints_from_glossary(files, paths)
+    merged.update(orphan)  # ORPHAN beats STALE per the docstring.
+    return merged
+
+
 def command_prepare(args):
     repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
         args.repo, args.context_dir, args.branch
@@ -627,11 +860,23 @@ def command_prepare(args):
     include_repo = args.scope == "branch+repo"
     files = _scan_scope(paths, include_repo)
 
-    hints = {}
+    user_hints = {}
     if args.hints_json:
-        hints = _validate_hints(json.loads(args.hints_json))
+        user_hints = _validate_hints(json.loads(args.hints_json))
     elif args.hints_file:
-        hints = _validate_hints(json.loads(Path(args.hints_file).read_text(encoding="utf-8")))
+        user_hints = _validate_hints(json.loads(Path(args.hints_file).read_text(encoding="utf-8")))
+
+    # Auto-hints: derived from log.md timestamps + glossary cross-references.
+    # User-supplied hints win on the same entry — user signals are explicit
+    # judgment calls and shouldn't be silently overridden by heuristics.
+    if args.auto_hints:
+        auto = _compute_auto_hints(
+            files, paths, stale_threshold_days=args.stale_after_days,
+        )
+    else:
+        auto = {}
+    hints = dict(auto)
+    hints.update(user_hints)
 
     proposals = []
     if args.proposals_json:
@@ -680,6 +925,18 @@ def command_prepare(args):
                 "entry_count": len(s["entries"]),
             })
 
+    hints_summary = {
+        "auto_enabled": bool(args.auto_hints),
+        "stale_after_days": args.stale_after_days,
+        "auto_count": len(auto),
+        "auto_by_label": {
+            label: sum(1 for v in auto.values() if v["label"] == label)
+            for label in sorted({v["label"] for v in auto.values()})
+        } if auto else {},
+        "user_count": len(user_hints),
+        "total_count": len(hints),
+    }
+
     print(json.dumps({
         "mode": "prepare",
         "review_html": str(out_path),
@@ -687,6 +944,7 @@ def command_prepare(args):
         "annotated_md": str(annotated_md_path),
         "annotated_md_open": f"file://{annotated_md_path}",
         "scope": scope_meta,
+        "hints_summary": hints_summary,
         "entry_count": len(entry_index),
         "entries": entry_index,
         "section_count": len(section_index),
@@ -1238,6 +1496,37 @@ def command_apply(args):
         summary_lines += [f"- {json.dumps(v, ensure_ascii=False)}" for v in invalid]
     summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
 
+    # Event log: one row per apply. Mirror to repo_log if any rewritten file
+    # lives at the repo-shared layer (include_repo plan touched repo_*).
+    touches_repo = any(r["file_key"].startswith("repo_") for r in rewritten)
+    log_details = [
+        ("accepted", len(accepted)),
+        ("rejected", len(rejected)),
+        ("custom", len(custom)),
+        ("rewritten", len(rewritten)),
+        ("invalid", len(invalid)),
+        ("backup", backup_dir.name),
+    ]
+    log_summary = (
+        f"accepted={len(accepted)} rewritten={len(rewritten)}"
+        if rewritten or accepted else "no-op"
+    )
+    append_log_event(
+        paths.get("log"),
+        "tidy",
+        kind="apply",
+        summary=log_summary,
+        details=log_details,
+    )
+    if touches_repo and paths.get("repo_log") and paths.get("repo_log") != paths.get("log"):
+        append_log_event(
+            paths.get("repo_log"),
+            "tidy",
+            kind="apply",
+            summary=log_summary,
+            details=log_details,
+        )
+
     print(json.dumps({
         "mode": "apply",
         "branch": branch_name,
@@ -1292,6 +1581,19 @@ def main():
     hint_group = p_prep.add_mutually_exclusive_group()
     hint_group.add_argument("--hints-json", help="Inline JSON object keyed by entry id with {label, reason}")
     hint_group.add_argument("--hints-file", help="Path to JSON file with the same shape as --hints-json")
+    p_prep.add_argument(
+        "--no-auto-hints",
+        dest="auto_hints",
+        action="store_false",
+        help="Skip the built-in STALE-by-log + ORPHAN-glossary hint passes",
+    )
+    p_prep.add_argument(
+        "--stale-after-days",
+        type=int,
+        default=AUTO_STALE_THRESHOLD_DAYS,
+        help=f"Auto-hint STALE for files last seen in log >= this many days ago (default {AUTO_STALE_THRESHOLD_DAYS})",
+    )
+    p_prep.set_defaults(auto_hints=True)
     proposal_group = p_prep.add_mutually_exclusive_group()
     proposal_group.add_argument(
         "--proposals-json",

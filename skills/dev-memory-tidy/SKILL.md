@@ -82,6 +82,14 @@ npx dev-memory tidy prepare \
   "open_url": "file:///.../review_<ts>.html",
   "annotated_md": "/Users/.../branches/master/tidy_review/entries.annotated.md",
   "annotated_md_open": "file:///.../entries.annotated.md",
+  "hints_summary": {
+    "auto_enabled": true,
+    "stale_after_days": 30,
+    "auto_count": 8,
+    "auto_by_label": {"STALE": 5, "ORPHAN": 3},
+    "user_count": 0,
+    "total_count": 8
+  },
   "entry_count": 66,
   "section_count": 22,
   "block_count": 18,
@@ -93,6 +101,15 @@ npx dev-memory tidy prepare \
 ```
 
 第一次跑没 proposals，HTML 空着 —— 这是给 agent 看 entries / sections / blocks 的。
+
+**自动 hints（默认开）**：prepare 默认跑两个轻量启发式 pass，把"值得 review 的 entry"贴标签写进 review.html 的 hint 区：
+
+| hint   | 触发条件                                                                                                       |
+| ------ | -------------------------------------------------------------------------------------------------------------- |
+| STALE  | 某文件在 `log.md` 里最近一次出现是 `--stale-after-days` （默认 30）天之前 → 文件下所有 entry 标 STALE      |
+| ORPHAN | `glossary.md` / `repo_glossary.md` 的某条 entry 的 key phrase（冒号前的内容，≥ 4 字符）在其他 .md 里零引用 |
+
+输出 `hints_summary.auto_by_label` 显示这次 auto 出了多少条、什么类型。用户传 `--hints-json/--hints-file` 时**用户优先**（不会被 auto 覆盖）。完全关掉用 `--no-auto-hints`；调阈值用 `--stale-after-days N`。STALE 不在 log 出现的文件**不标**（避免冷启动一次性给所有文件贴 STALE）。
 
 **🌟 读取顺序（重要）**：第一次 prepare 完，**优先 Read `annotated_md` 文件**而不是去解 stdout 的 JSON entries 数组。annotated md 是一份**带 entry id + block 边界 + orphan paragraph 注释**的原 md 镜像 —— 一次读完同时拿到语义结构 + 所有 id 映射，不用读两次（不像 JSON 把 markdown 拍平丢了上下文）。
 
