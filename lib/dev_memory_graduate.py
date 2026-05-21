@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dev_memory_common import (
     ARCHIVE_INDEX_NAME,
     append_archive_index,
+    append_log_event,
     append_to_section,
     archive_branch_dir,
     archive_root_dir,
@@ -197,6 +198,27 @@ def command_apply(args):
         notes_short = (harvest.get("notes") or "").splitlines()[0][:80] if harvest.get("notes") else ""
         index_line = f"- {date_tag[:4]}-{date_tag[4:6]}-{date_tag[6:8]} {branch_name} (HEAD {head}) → harvested {total} entries: {notes_short}"
         append_archive_index(archive_root_dir(repo_dir) / ARCHIVE_INDEX_NAME, index_line)
+
+    # Event log: graduate is a repo-layer event (the branch log is gone with
+    # the archive move). One row in repo/log.md captures the harvest + archive
+    # destination so future readers can scan the timeline.
+    log_summary = f"branch={branch_name} harvested={total}"
+    log_details = [
+        ("harvested_total", total),
+        ("repo_overview", applied["repo_overview"]),
+        ("repo_decisions", applied["repo_decisions"]),
+        ("repo_glossary", applied["repo_glossary"]),
+        ("archived_to", archive_dst.name if archive_dst else "no"),
+    ]
+    if harvest.get("notes"):
+        log_details.append(("notes", (harvest["notes"] or "").splitlines()[0][:120]))
+    append_log_event(
+        paths.get("repo_log"),
+        "graduate",
+        kind="apply",
+        summary=log_summary,
+        details=log_details,
+    )
 
     print(json.dumps({
         "branch": branch_name,

@@ -26,6 +26,7 @@ from dev_memory_common import (
     AUTO_END,
     AUTO_START,
     PLACEHOLDER_MARKERS,
+    append_log_event,
     append_to_section,
     asset_paths,
     classify_content,
@@ -46,6 +47,55 @@ from dev_memory_common import (
     upsert_progress_section,
     write_json,
 )
+
+
+def _log_targets_for(touched):
+    """Return (touches_repo, formatted_targets_line) from the touched list.
+
+    `touched` items look like {"file": "branch/decisions.md", "section": ...,
+    "mode": ...}. The formatted line keeps it short for log readability:
+    each target rendered as `branch/decisions.md(append)`, dropping the
+    section to avoid blowing past _LOG_SUMMARY_MAX on batch writes.
+    """
+    if not touched:
+        return False, None
+    touches_repo = any(t.get("file", "").startswith("repo/") for t in touched)
+    parts = []
+    for t in touched:
+        file_ = t.get("file", "?")
+        mode = t.get("mode", "?")
+        parts.append(f"{file_}({mode})")
+    return touches_repo, ", ".join(parts)
+
+
+def _emit_capture_log(paths, *, action, kind_label, summary, touched, extra_details=None):
+    """Append an event row to log.md after a successful capture write.
+
+    Writes to the branch-level log by default. If any touched target lives
+    under the repo-shared layer (`repo/...`), also mirrors a row into the
+    repo log so cross-branch readers see shared-layer mutations.
+    """
+    touches_repo, targets_line = _log_targets_for(touched)
+    details = []
+    if targets_line:
+        details.append(("targets", targets_line))
+    for k, v in (extra_details or []):
+        details.append((k, v))
+    append_log_event(
+        paths.get("log"),
+        action,
+        kind=kind_label,
+        summary=summary,
+        details=details,
+    )
+    if touches_repo and paths.get("repo_log") and paths.get("repo_log") != paths.get("log"):
+        append_log_event(
+            paths.get("repo_log"),
+            action,
+            kind=kind_label,
+            summary=summary,
+            details=details,
+        )
 
 
 def _append_with_separator(path, title, body):
@@ -913,6 +963,30 @@ def command_record(args):
     )
     write_json(paths["repo_manifest"], repo_manifest)
 
+    # Event log: one row per record call. Skip when nothing was actually
+    # written (e.g. batch mode where every entry was dedup-blocked) — the log
+    # would be a misleading "we did something" signal.
+    if touched:
+        if payload:
+            log_kind = "session-payload"
+            log_summary = payload.get("title") or f"{len(touched)} target(s)"
+        else:
+            log_kind = manifest.get("last_capture_kind") or "auto"
+            log_summary = (
+                content if 'content' in locals() and content else f"{len(touched)} target(s)"
+            )
+        extra = []
+        if dedup_blocked:
+            extra.append(("blocked", len(dedup_blocked)))
+        _emit_capture_log(
+            paths,
+            action="capture",
+            kind_label=log_kind,
+            summary=log_summary,
+            touched=touched,
+            extra_details=extra,
+        )
+
     output = {
         "repo_root": str(repo_root),
         "repo_key": repo_key,
@@ -1034,6 +1108,16 @@ def command_rewrite_entry(args):
     write_json(paths["manifest"], manifest)
 
     new_first_line = _first_nonempty_line(_strip_bullet_prefix(_first_nonempty_line(new_text)))
+
+    _emit_capture_log(
+        paths,
+        action="rewrite-entry",
+        kind_label=file_key,
+        summary=new_first_line,
+        touched=[{"file": _label(file_key), "section": section_title, "mode": "rewrite-entry"}],
+        extra_details=[("id", eid), ("previous", previous_first_line)],
+    )
+
     print(json.dumps({
         "mode": "rewrite-entry",
         "id": eid,

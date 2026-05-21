@@ -284,11 +284,13 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
             ("decisions", "决策背景（为什么这么做）"),
             ("glossary", "术语 + 源资料入口"),
             ("overview", "分支概览（目标 / 范围 / 阶段 / 约束）"),
+            ("log", "事件日志（append-only；`grep '^## \\[' log.md | tail -20` 看最近事件）"),
         )
         repo_specs = (
             ("repo_overview", "长期目标 + 跨分支约束"),
             ("repo_decisions", "跨分支通用决策"),
             ("repo_glossary", "长期背景 + 共享入口"),
+            ("repo_log", "仓库事件日志（graduate / 共享层 capture）"),
         )
 
         def _group(specs):

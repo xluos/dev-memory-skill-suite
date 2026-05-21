@@ -43,6 +43,7 @@ MANAGED_FILES = (
     "glossary.md",
     "unsorted.md",
     "pending-promotion.md",
+    "log.md",
 )
 
 # Legacy v1 files are auto-migrated on first write/read then deleted. The list
@@ -438,6 +439,7 @@ def asset_paths(repo_dir, branch_dir):
         "repo_overview": repo_memory_dir / "overview.md",
         "repo_decisions": repo_memory_dir / "decisions.md",
         "repo_glossary": repo_memory_dir / "glossary.md",
+        "repo_log": repo_memory_dir / "log.md",
         "repo_artifacts": repo_memory_dir / "artifacts",
     }
     # In no-git mode, branch_dir collapses onto repo_memory_dir. Progress/risks
@@ -453,6 +455,7 @@ def asset_paths(repo_dir, branch_dir):
             "glossary": paths["repo_glossary"],
             "unsorted": repo_memory_dir / "unsorted.md",
             "pending_promotion": repo_memory_dir / "pending-promotion.md",
+            "log": paths["repo_log"],
             "artifacts": paths["repo_artifacts"],
             "history": repo_memory_dir / "artifacts" / "history",
         })
@@ -466,6 +469,7 @@ def asset_paths(repo_dir, branch_dir):
         "glossary": branch_dir / "glossary.md",
         "unsorted": branch_dir / "unsorted.md",
         "pending_promotion": branch_dir / "pending-promotion.md",
+        "log": branch_dir / "log.md",
         "artifacts": branch_dir / "artifacts",
         "history": branch_dir / "artifacts" / "history",
     })
@@ -616,6 +620,32 @@ def template_pending_promotion():
         "本文件由 capture 在检测到内容可能跨分支复用时自动打标写入。\n"
         "graduate 时优先从此文件筛选提炼到 repo 共享层。\n\n"
         "## 候选条目\n\n- 待补充\n"
+    )
+
+
+def template_log(scope_label):
+    """Branch-layer event log skeleton.
+
+    Append-only. Each entry is an H2 line starting with `## [<ISO timestamp>]`
+    so `grep '^## \\['` slices the timeline cleanly. Optional sub-detail
+    lines start with `- ` underneath.
+    """
+    return (
+        "# 事件日志\n\n"
+        f"- scope: {scope_label}\n\n"
+        "Append-only。capture / tidy / graduate 等动作落盘后追加一行。\n"
+        "`grep '^## \\[' log.md | tail -20` 看最近事件。\n\n"
+        "<!-- LOG ENTRIES BELOW -->\n"
+    )
+
+
+def template_repo_log(repo_name):
+    return (
+        "# 仓库共享事件日志\n\n"
+        f"- repo: {repo_name}\n\n"
+        "Append-only。repo-shared 写入 / graduate harvest / 归档落盘后追加一行。\n"
+        "`grep '^## \\[' log.md | tail -20` 看最近事件。\n\n"
+        "<!-- LOG ENTRIES BELOW -->\n"
     )
 
 
@@ -1041,10 +1071,12 @@ def initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key
     ensure_file(paths["repo_overview"], template_repo_overview(repo_root.name))
     ensure_file(paths["repo_decisions"], template_repo_decisions(repo_root.name))
     ensure_file(paths["repo_glossary"], template_repo_glossary(repo_root.name))
+    ensure_file(paths["repo_log"], template_repo_log(repo_root.name))
 
     if no_git:
         # In no-git mode, progress/risks/unsorted/pending live at the repo
         # layer since there's no branch. Seed them with degraded templates.
+        # log/log.md collapses onto repo_log via asset_paths(); no extra seed.
         ensure_file(paths["progress"], template_progress_no_git(repo_root.name))
         ensure_file(paths["risks"], template_risks(repo_root.name))
         ensure_file(paths["unsorted"], template_unsorted())
@@ -1060,6 +1092,7 @@ def initialize_assets(repo_root, branch_name, branch_key, storage_root, repo_key
     ensure_file(paths["glossary"], template_glossary(branch_name))
     ensure_file(paths["unsorted"], template_unsorted())
     ensure_file(paths["pending_promotion"], template_pending_promotion())
+    ensure_file(paths["log"], template_log(f"branch:{branch_name}"))
 
     # Stamp migration info onto the branch manifest so graduate/context can
     # surface it when relevant.
@@ -1711,6 +1744,80 @@ def sync_progress(paths, facts):
     current = ensure_progress_auto_block(paths["progress"])
     updated = replace_auto_block(current, build_auto_block(facts))
     paths["progress"].write_text(updated, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Event log (append-only timeline)
+# ---------------------------------------------------------------------------
+
+# Cap on the inline summary so a runaway body doesn't produce a 5K-char log
+# line. Anything longer is truncated with `…` — the full content already
+# lives in the target file the entry points at.
+_LOG_SUMMARY_MAX = 160
+
+
+def _summarize_for_log(text):
+    """Collapse multi-line text to a single-line summary suitable for the
+    H2 header. Strips bullet markers and trims to _LOG_SUMMARY_MAX chars."""
+    if not text:
+        return ""
+    first = ""
+    for line in str(text).splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith(("- ", "* ")):
+            s = s[2:].strip()
+        first = s
+        break
+    if len(first) > _LOG_SUMMARY_MAX:
+        first = first[: _LOG_SUMMARY_MAX - 1].rstrip() + "…"
+    return first
+
+
+def append_log_event(log_path, action, *, kind=None, summary=None, details=None):
+    """Append an event line to a log.md file.
+
+    Format:
+        ## [<ISO timestamp>] <action>[ · <kind>][ | <summary>]
+        - key: value      # optional
+        - key: value
+
+    `action`  — short verb: capture / rewrite-entry / tidy / graduate / etc.
+    `kind`    — sub-classifier (e.g. "decision", "apply"); optional.
+    `summary` — one-line content preview; multi-line input is collapsed.
+    `details` — iterable of (key, value) pairs rendered as `- key: value`
+                lines under the header. Values are str()-cast.
+
+    Idempotent on file creation: ensures the file exists with a minimal
+    skeleton if missing (covers callers operating on legacy branch dirs
+    that pre-date this feature).
+    """
+    if log_path is None:
+        return
+    if not log_path.exists():
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(template_log("unknown"), encoding="utf-8")
+
+    header_parts = [f"## [{now_iso()}] {action}"]
+    if kind:
+        header_parts.append(f" · {kind}")
+    summary_clean = _summarize_for_log(summary) if summary else ""
+    if summary_clean:
+        header_parts.append(f" | {summary_clean}")
+    header = "".join(header_parts)
+
+    lines = [header]
+    for key, value in (details or []):
+        if value is None or value == "":
+            continue
+        lines.append(f"- {key}: {value}")
+
+    block = "\n".join(lines) + "\n"
+    existing = log_path.read_text(encoding="utf-8")
+    if not existing.endswith("\n"):
+        existing += "\n"
+    log_path.write_text(existing + "\n" + block, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
