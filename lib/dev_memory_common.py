@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -184,7 +185,39 @@ def sanitize_repo_name(repo_name):
 
 
 def set_storage_root_config(repo_root, storage_root):
-    run_git(["config", "--local", "dev-memory.root", str(storage_root)], cwd=repo_root)
+    desired = str(storage_root)
+
+    def current_value():
+        return run_git(
+            ["config", "--get", "dev-memory.root"],
+            cwd=repo_root,
+            check=False,
+        ).stdout.strip()
+
+    if current_value() == desired:
+        return False
+
+    last_error = ""
+    for attempt in range(5):
+        result = run_git(
+            ["config", "--local", "dev-memory.root", desired],
+            cwd=repo_root,
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+
+        last_error = result.stderr.strip() or "git config failed"
+        if "config.lock" not in last_error and "could not lock config file" not in last_error:
+            raise RuntimeError(last_error)
+
+        if current_value() == desired:
+            return False
+        time.sleep(0.05 * (attempt + 1))
+
+    if current_value() == desired:
+        return False
+    raise RuntimeError(last_error)
 
 
 def get_storage_root(repo_root, explicit_value=None):
