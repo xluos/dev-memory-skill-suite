@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/session_start.py",
+            "command": "dev-memory hook session-start",
             "timeout": 20
           }
         ],
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 scripts/hooks/stop.py",
+            "command": "dev-memory hook stop",
             "timeout": 15
           }
         ],

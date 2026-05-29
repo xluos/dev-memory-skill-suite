@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx dev-memory hook session-start"
+            "command": "dev-memory hook session-start"
           }
         ],
         "description": "Load repo+branch dev-memory context at session start",
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx dev-memory hook pre-compact",
+            "command": "dev-memory hook pre-compact",
             "timeout": 20
           }
         ],
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx dev-memory hook stop",
+            "command": "dev-memory hook stop",
             "timeout": 15
           }
         ],
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx dev-memory hook session-end",
+            "command": "dev-memory hook session-end",
             "timeout": 15
           }
         ],

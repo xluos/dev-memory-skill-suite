@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx dev-memory hook session-start",
+            "command": "dev-memory hook session-start",
             "timeout": 20
           }
         ],
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx dev-memory hook stop",
+            "command": "dev-memory hook stop",
             "timeout": 15
           }
         ],

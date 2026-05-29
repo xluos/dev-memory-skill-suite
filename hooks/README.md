@@ -29,13 +29,13 @@ sh scripts/install_codex_hooks.sh
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/xluos/dev-memory-skill-suite/main/scripts/install_codex_hooks.sh)"
 ```
 
-这个脚本会先安装 `@xluos/dev-memory-cli`，然后再 merge Codex hooks。
+这个脚本会先确保 `@xluos/dev-memory-cli` 可用，然后再 merge Codex hooks。
 
 如果 CLI 已经存在，也可以直接执行：
 
 ```bash
-npx dev-memory install-hooks codex
-npx dev-memory install-hooks claude
+dev-memory install-hooks codex
+dev-memory install-hooks claude
 ```
 
 ## 这些 hook 做什么
@@ -72,7 +72,7 @@ ECC 是插件形态，安装后可以靠插件机制自动加载 hook 配置。
 - 对其他仓库：
   - 先安装 `@xluos/dev-memory-cli`
   - 再把模板 merge 到对应 repo-local 配置
-  - hook 运行时统一走 `npx dev-memory hook ...`
+  - hook 运行时统一走 `dev-memory hook ...`
 - 不能假装成“像插件一样对所有仓库自动加载”
 
 ## 原则
