@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-One-shot user-side migration for the rename @xluos/dev-assets-cli → @xluos/dev-memory-cli.
+One-shot user-side migration for the rename @xluos/dev-assets-cli → dev-memory-cli.
 
 What it does (idempotent, with --dry-run):
 
@@ -10,7 +10,7 @@ What it does (idempotent, with --dry-run):
      dev-assets.{root,dir} -> dev-memory.{root,dir}
   4) Recreate skill symlinks under ~/.claude/skills/ and ~/.agents/skills/:
         dev-assets-* -> dev-memory-*  (only if they pointed into this repo)
-  5) Rewrite hook commands "npx dev-assets ..." -> "npx dev-memory ..." in:
+  5) Rewrite hook commands "npx dev-assets ..." -> "npx dev-memory-cli ..." in:
         ~/.claude/settings.json
         ~/.codex/hooks.json
         plus any --settings <path> the user passes
@@ -278,8 +278,8 @@ DEFAULT_SETTINGS_FILES = [
 ]
 
 CMD_PATTERNS = [
-    (re.compile(r"\bnpx\s+dev-assets\b"), "npx dev-memory"),
-    (re.compile(r"\bnpx\s+@xluos/dev-assets-cli\b"), "npx @xluos/dev-memory-cli"),
+    (re.compile(r"\bnpx\s+dev-assets\b"), "npx dev-memory-cli"),
+    (re.compile(r"\bnpx\s+@xluos/dev-assets-cli\b"), "npx dev-memory-cli"),
 ]
 
 ID_PATTERNS = [

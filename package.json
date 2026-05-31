@@ -1,5 +1,5 @@
 {
-  "name": "@xluos/dev-memory-cli",
+  "name": "dev-memory-cli",
   "version": "0.18.2",
   "description": "CLI for dev-memory hooks and repo-local setup (formerly @xluos/dev-assets-cli)",
   "license": "MIT",
@@ -20,7 +20,7 @@
     "prepublishOnly": "npm run check"
   },
   "bin": {
-    "dev-memory": "bin/dev-memory.js",
+    "dev-memory-cli": "bin/dev-memory.js",
     "dev-assets": "bin/dev-memory.js"
   },
   "files": [

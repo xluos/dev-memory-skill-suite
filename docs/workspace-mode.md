@@ -114,7 +114,7 @@ Mirror the iteration pattern. Both are Claude-only hooks (no Codex equivalent), 
 
 ## Skill / CLI Behavior
 
-### `dev-memory-sync` (CLI: `dev-memory record-session`)
+### `dev-memory-sync` (CLI: `dev-memory-cli record-session`)
 
 Add optional `--repo <basename>` flag:
 
@@ -126,15 +126,15 @@ Add optional `--repo <basename>` flag:
 
 `SKILL.md` updated: in workspace mode, the LLM should pass `--repo <basename>` to disambiguate. Default-to-primary is the convenience path.
 
-### `dev-memory-context` (CLI: `dev-memory recover-context`)
+### `dev-memory-context` (CLI: `dev-memory-cli recover-context`)
 
 Add `--repo <basename>` for explicit cross-repo loading mid-session. Useful when LLM realizes it needs full memory for a non-primary repo.
 
-### `dev-memory-update` (CLI: `dev-memory update-section`)
+### `dev-memory-update` (CLI: `dev-memory-cli update-section`)
 
 Add `--repo <basename>`. Same disambiguation rules as sync.
 
-### `dev-memory-setup` (CLI: `dev-memory init`)
+### `dev-memory-setup` (CLI: `dev-memory-cli init`)
 
 Workspace mode + no `--repo`: refuse with message `"workspace mode: setup must target a single repo, pass --repo <basename> for one of: a, b, c"`. Per-repo init is intentional — each repo's first-time setup is a deliberate user decision.
 

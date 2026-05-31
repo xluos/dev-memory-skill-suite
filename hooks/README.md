@@ -12,7 +12,7 @@
 - 可复用模板：
   - Claude: [hooks/hooks.json](hooks.json)
   - Codex: [hooks/codex-hooks.json](codex-hooks.json)
-- `@xluos/dev-memory-cli` 是这两套配置共用的稳定执行入口
+- `dev-memory-cli` 是这两套配置共用的稳定执行入口
 - 是否自动生效取决于你本地是否把对应配置文件落到了各自约定位置，而不是模板文件本身
 
 ### Codex 快速安装
@@ -29,14 +29,16 @@ sh scripts/install_codex_hooks.sh
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/xluos/dev-memory-skill-suite/main/scripts/install_codex_hooks.sh)"
 ```
 
-这个脚本会先确保 `@xluos/dev-memory-cli` 可用，然后再 merge Codex hooks。
+这个脚本会先确保 `dev-memory-cli` 可用，然后再 merge Codex hooks。
 
 如果 CLI 已经存在，也可以直接执行：
 
 ```bash
-dev-memory install-hooks codex
-dev-memory install-hooks claude
+dev-memory-cli install-hooks codex
+dev-memory-cli install-hooks claude
 ```
+
+已有旧配置如果还写着 `dev-memory hook ...` 或 `npx dev-memory hook ...`，重新执行安装命令会按 hook id 覆盖为 `dev-memory-cli hook ...`。
 
 ## 这些 hook 做什么
 
@@ -70,9 +72,9 @@ ECC 是插件形态，安装后可以靠插件机制自动加载 hook 配置。
   - Claude 把 [hooks/hooks.json](hooks.json) 合并到本地 `.claude/settings.local.json`
   - Codex 把 [hooks/codex-hooks.json](codex-hooks.json) 放到或合并到本地 `.codex/hooks.json`
 - 对其他仓库：
-  - 先安装 `@xluos/dev-memory-cli`
+  - 先安装 `dev-memory-cli`
   - 再把模板 merge 到对应 repo-local 配置
-  - hook 运行时统一走 `dev-memory hook ...`
+  - hook 运行时统一走 `dev-memory-cli hook ...`
 - 不能假装成“像插件一样对所有仓库自动加载”
 
 ## 原则

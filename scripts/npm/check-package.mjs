@@ -75,4 +75,15 @@ JSON.parse(fs.readFileSync(path.join(repoRoot, "hooks/hooks.json"), "utf8"));
 JSON.parse(fs.readFileSync(path.join(repoRoot, "hooks/codex-hooks.json"), "utf8"));
 JSON.parse(fs.readFileSync(path.join(repoRoot, "suite-manifest.json"), "utf8"));
 
+const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+if (pkg.name !== "dev-memory-cli") {
+  fail(`package name must be dev-memory-cli, got ${pkg.name}`);
+}
+if (!pkg.bin || pkg.bin["dev-memory-cli"] !== "bin/dev-memory.js") {
+  fail("package bin must expose dev-memory-cli -> bin/dev-memory.js");
+}
+if (Object.prototype.hasOwnProperty.call(pkg.bin, "dev-memory")) {
+  fail("package bin must not expose dev-memory; that npm command name is occupied");
+}
+
 process.stdout.write("Package checks passed.\n");

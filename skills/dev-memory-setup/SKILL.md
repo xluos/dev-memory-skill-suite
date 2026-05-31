@@ -39,7 +39,7 @@ Setup 的新职责是一个 **promotion 动作**：
 ### Step 1: init（永远安全，幂等）
 
 ```bash
-npx dev-memory setup init \
+npx dev-memory-cli setup init \
   [--repo <repo-path>] [--branch <branch-name>]
 ```
 
@@ -86,7 +86,7 @@ plan.json 格式：
 运行 merge：
 
 ```bash
-npx dev-memory setup merge-unsorted \
+npx dev-memory-cli setup merge-unsorted \
   --plan-file /tmp/dev-memory-merge-plan.json \
   [--repo <repo-path>]
 ```
@@ -111,7 +111,7 @@ setup 之后仍可能有空模板，走 capture 填：
 如果 unsorted 是空的，但你想切换默认分类策略（从"不确定 → unsorted"切到"不确定 → progress"），直接跑：
 
 ```bash
-npx dev-memory setup mark-completed \
+npx dev-memory-cli setup mark-completed \
   [--repo <repo-path>]
 ```
 

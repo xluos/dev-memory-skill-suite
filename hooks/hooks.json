@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "dev-memory hook session-start"
+            "command": "dev-memory-cli hook session-start"
           }
         ],
         "description": "Load repo+branch dev-memory context at session start",
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "dev-memory hook pre-compact",
+            "command": "dev-memory-cli hook pre-compact",
             "timeout": 20
           }
         ],
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "dev-memory hook stop",
+            "command": "dev-memory-cli hook stop",
             "timeout": 15
           }
         ],
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "dev-memory hook session-end",
+            "command": "dev-memory-cli hook session-end",
             "timeout": 15
           }
         ],

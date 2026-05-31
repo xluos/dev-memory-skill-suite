@@ -329,8 +329,8 @@ def _build_dedup_hint(kind, file_key, section_title, new_content, matches):
     # The caller has already passed `section_title`; section_idx is derived
     # later in _check_dedup_for_kind when it has the file context.
     next_actions = [
-        "如果是修订旧条目: dev-memory capture rewrite-entry --id <match_id> --content '<text>'",
-        "如果确实要再写一条: dev-memory capture record --kind {kind} --content '<text>' --force".format(kind=kind),
+        "如果是修订旧条目: dev-memory-cli capture rewrite-entry --id <match_id> --content '<text>'",
+        "如果确实要再写一条: dev-memory-cli capture record --kind {kind} --content '<text>' --force".format(kind=kind),
         "如果不写: 不调任何命令",
     ]
     return {

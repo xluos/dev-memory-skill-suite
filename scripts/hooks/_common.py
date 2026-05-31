@@ -408,7 +408,7 @@ def build_workspace_start_context():
     if has_brief:
         header_parts.append(
             "_其它仓库按 brief 摘要注入；每个 brief 末尾列出该仓库的完整记忆文件路径，"
-            "聚焦时直接 Read 即可（如需 CLI：`dev-memory context show --repo <name>`）。_"
+            "聚焦时直接 Read 即可（如需 CLI：`dev-memory-cli context show --repo <name>`）。_"
         )
     header = "\n".join(header_parts)
     return header + "\n\n---\n\n" + "\n\n---\n\n".join(sections)

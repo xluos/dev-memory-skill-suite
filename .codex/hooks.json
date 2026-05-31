@@ -1,32 +1,3 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "dev-memory hook session-start",
-            "timeout": 20
-          }
-        ],
-        "description": "Load repo+branch dev-memory context at session start",
-        "id": "dev-memory:session-start"
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "dev-memory hook stop",
-            "timeout": 15
-          }
-        ],
-        "description": "Persist lightweight HEAD markers after each response",
-        "id": "dev-memory:stop"
-      }
-    ]
-  }
+  "hooks": {}
 }

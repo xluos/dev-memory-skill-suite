@@ -957,7 +957,7 @@ def command_prepare(args):
             "2) Decide semantic 'fixes' to propose. Prefer `delete-block` over per-entry `delete-entries` when removing a full semantic unit (block ids are in `blocks[]`).",
             "3) Re-run prepare with --proposals-json or --proposals-file to bake proposal cards into the HTML.",
             "4) Tell the user to open open_url; default each proposal accept/reject; expand to inspect; export plan.json.",
-            "5) When plan.json is downloaded, run: dev-memory tidy apply --plan-file <path>.",
+            "5) When plan.json is downloaded, run: dev-memory-cli tidy apply --plan-file <path>.",
         ],
     }, ensure_ascii=False, indent=2))
     return 0

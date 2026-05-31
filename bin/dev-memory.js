@@ -255,7 +255,7 @@ function loadClack() {
   } catch (_) {
     fail(
       "@clack/prompts is not installed. Run `npm install` inside the dev-memory-cli "
-      + "package, or use the non-interactive forms: dev-memory branch rename|fork ...",
+      + "package, or use the non-interactive forms: dev-memory-cli branch rename|fork ...",
     );
   }
 }
@@ -452,9 +452,9 @@ async function commandBranchInteractive() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     fail(
       "interactive branch flow requires a TTY. Use the non-interactive form instead:\n"
-      + "  dev-memory branch list\n"
-      + "  dev-memory branch rename --source A --target B [--force | --backup]\n"
-      + "  dev-memory branch fork   --source A --target B [--force | --backup]",
+      + "  dev-memory-cli branch list\n"
+      + "  dev-memory-cli branch rename --source A --target B [--force | --backup]\n"
+      + "  dev-memory-cli branch fork   --source A --target B [--force | --backup]",
     );
   }
   const p = loadClack();
@@ -515,14 +515,14 @@ function commandBranch(rawArgs) {
   if (!sub || sub === "--help" || sub === "-h") {
     if (sub === "--help" || sub === "-h") {
       process.stdout.write(`Usage:
-  dev-memory branch                          # interactive flow
-  dev-memory branch list                     # JSON snapshot of all branches
-  dev-memory branch inspect [--branch NAME]  # JSON snapshot of one branch
-  dev-memory branch rename --source A --target B [--force | --backup]
-  dev-memory branch fork   --source A --target B [--force | --backup]
-  dev-memory branch delete [--branch NAME] [--force | --backup]
-  dev-memory branch init   [--branch NAME] [--force | --backup]
-  dev-memory branch inherit-worktree-base [--source NAME] [--branch NAME] [--force | --backup]
+  dev-memory-cli branch                          # interactive flow
+  dev-memory-cli branch list                     # JSON snapshot of all branches
+  dev-memory-cli branch inspect [--branch NAME]  # JSON snapshot of one branch
+  dev-memory-cli branch rename --source A --target B [--force | --backup]
+  dev-memory-cli branch fork   --source A --target B [--force | --backup]
+  dev-memory-cli branch delete [--branch NAME] [--force | --backup]
+  dev-memory-cli branch init   [--branch NAME] [--force | --backup]
+  dev-memory-cli branch inherit-worktree-base [--source NAME] [--branch NAME] [--force | --backup]
                                              # explicit worktree-base inheritance (auto-fires on first lazy-init)
 `);
       return;
@@ -537,16 +537,16 @@ function commandBranch(rawArgs) {
 
 function printHelp() {
   process.stdout.write(`Usage:
-  dev-memory hook <session-start|pre-compact|stop|session-end> [--repo PATH]
-  dev-memory install-hooks <codex|claude> [--repo PATH] [--global]
-  dev-memory install-hooks --all [--repo PATH] [--global]
-  dev-memory ui [--port N] [--host HOST] [--no-open] [--read-only]
-  dev-memory context <show|...> [...]
-  dev-memory capture <record|show|sync-working-tree|record-head|suggest-kind|classify> [...]
-  dev-memory setup <init|merge-unsorted|mark-completed> [...]
-  dev-memory graduate <dry-run|apply|index> [...]
-  dev-memory tidy <prepare|apply> [...]
-  dev-memory branch [list|inspect|rename|fork|delete|init|inherit-worktree-base] [...]   # no subcommand = interactive
+  dev-memory-cli hook <session-start|pre-compact|stop|session-end> [--repo PATH]
+  dev-memory-cli install-hooks <codex|claude> [--repo PATH] [--global]
+  dev-memory-cli install-hooks --all [--repo PATH] [--global]
+  dev-memory-cli ui [--port N] [--host HOST] [--no-open] [--read-only]
+  dev-memory-cli context <show|...> [...]
+  dev-memory-cli capture <record|show|sync-working-tree|record-head|suggest-kind|classify> [...]
+  dev-memory-cli setup <init|merge-unsorted|mark-completed> [...]
+  dev-memory-cli graduate <dry-run|apply|index> [...]
+  dev-memory-cli tidy <prepare|apply> [...]
+  dev-memory-cli branch [list|inspect|rename|fork|delete|init|inherit-worktree-base] [...]   # no subcommand = interactive
 
 Environment:
   DEV_MEMORY_ROOT defaults to ${DEFAULT_STORAGE_ROOT}

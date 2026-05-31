@@ -41,7 +41,7 @@ v1 graduate 要全量审核 branch 目录里所有 markdown。v2 里 capture 在
 ### Step 1: Pre-flight check
 
 ```bash
-npx dev-memory graduate dry-run \
+npx dev-memory-cli graduate dry-run \
   [--repo <repo-path>] [--branch <branch-name>]
 ```
 
@@ -81,7 +81,7 @@ npx dev-memory graduate dry-run \
 ### Step 3: apply
 
 ```bash
-npx dev-memory graduate apply \
+npx dev-memory-cli graduate apply \
   --harvest-file /tmp/graduate-harvest.json \
   [--repo <repo-path>] [--branch <branch-name>]
 ```
@@ -95,7 +95,7 @@ npx dev-memory graduate apply \
 ### Step 4: 查索引
 
 ```bash
-npx dev-memory graduate index
+npx dev-memory-cli graduate index
 ```
 
 列出所有已归档分支。

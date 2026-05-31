@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "dev-memory hook session-start",
+            "command": "dev-memory-cli hook session-start",
             "timeout": 20
           }
         ],
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "dev-memory hook stop",
+            "command": "dev-memory-cli hook stop",
             "timeout": 15
           }
         ],
