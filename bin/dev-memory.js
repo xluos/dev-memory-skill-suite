@@ -7,6 +7,7 @@ const os = require("node:os");
 
 const PACKAGE_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_STORAGE_ROOT = path.join(os.homedir(), ".dev-memory", "repos");
+const DEFAULT_CONFIG_PATH = process.env.DEV_MEMORY_CONFIG_PATH || path.join(os.homedir(), ".dev-memory", "config.json");
 
 function fail(message) {
   process.stderr.write(`ERROR: ${message}\n`);
@@ -116,6 +117,72 @@ function writeJson(filePath, data) {
   fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
+function commandExists(command) {
+  const result = spawnSync("sh", ["-lc", `command -v ${command}`], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 && Boolean((result.stdout || "").trim());
+}
+
+function detectSessionSummaryCommand() {
+  if (commandExists("coco")) {
+    return {
+      provider: "coco",
+      command: "coco -p --yolo --session-id {summary_session_id} {prompt}",
+    };
+  }
+  if (commandExists("codex")) {
+    return {
+      provider: "codex",
+      command: "codex exec --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox danger-full-access {prompt}",
+    };
+  }
+  if (commandExists("claude")) {
+    return {
+      provider: "claude",
+      command: "claude -p --permission-mode bypassPermissions --session-id {summary_session_uuid} {prompt}",
+    };
+  }
+  return null;
+}
+
+function ensureSessionSummaryConfig() {
+  const configPath = DEFAULT_CONFIG_PATH;
+  const existing = fs.existsSync(configPath) ? loadJson(configPath) : {};
+  const config = existing && typeof existing === "object" ? existing : {};
+  const sessionSummary = config.session_summary && typeof config.session_summary === "object"
+    ? { ...config.session_summary }
+    : {};
+  if (typeof sessionSummary.command === "string" && sessionSummary.command.trim()) {
+    return {
+      path: configPath,
+      changed: false,
+      provider: sessionSummary.provider || null,
+      command: sessionSummary.command,
+    };
+  }
+  const detected = detectSessionSummaryCommand();
+  if (!detected) {
+    return { path: configPath, changed: false, provider: null, command: null };
+  }
+  config.session_summary = {
+    ...sessionSummary,
+    provider: detected.provider,
+    command: detected.command,
+    max_attempts: sessionSummary.max_attempts || 3,
+    configured_at: new Date().toISOString(),
+    source: "install-hooks:auto-detect",
+  };
+  writeJson(configPath, config);
+  return {
+    path: configPath,
+    changed: true,
+    provider: detected.provider,
+    command: detected.command,
+  };
+}
+
 function templatePathForAgent(agent) {
   if (agent === "codex") return packageScript("hooks", "codex-hooks.json");
   if (agent === "claude") return packageScript("hooks", "hooks.json");
@@ -186,7 +253,14 @@ function installHooksForAgent(agent, options) {
   const existing = fs.existsSync(targetPath) ? loadJson(targetPath) : {};
   const merged = mergeConfig(existing, template);
   writeJson(targetPath, merged);
-  const report = { agent, scope, target: targetPath, events: Object.keys(template.hooks || {}) };
+  const summaryConfig = ensureSessionSummaryConfig();
+  const report = {
+    agent,
+    scope,
+    target: targetPath,
+    events: Object.keys(template.hooks || {}),
+    session_summary_config: summaryConfig,
+  };
   if (repoRoot) report.repo_root = repoRoot;
   return report;
 }
@@ -216,6 +290,7 @@ const PY_SUBCOMMAND_SCRIPTS = {
   setup: "dev_memory_setup.py",
   graduate: "dev_memory_graduate.py",
   tidy: "dev_memory_tidy.py",
+  summary: "dev_memory_summary.py",
 };
 
 function commandPySubcommand(name, rawArgs) {
@@ -546,6 +621,7 @@ function printHelp() {
   dev-memory-cli setup <init|merge-unsorted|mark-completed> [...]
   dev-memory-cli graduate <dry-run|apply|index> [...]
   dev-memory-cli tidy <prepare|apply> [...]
+  dev-memory-cli summary <extract-core> [...]
   dev-memory-cli branch [list|inspect|rename|fork|delete|init|inherit-worktree-base] [...]   # no subcommand = interactive
 
 Environment:

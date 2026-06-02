@@ -35,6 +35,24 @@ def _run_rewrite(branch_info, **kwargs):
     return code, out_buf.getvalue(), err_buf.getvalue()
 
 
+def _delete_args(branch_info, *, entry_id):
+    return argparse.Namespace(
+        repo=str(branch_info["repo_root"]),
+        context_dir=str(branch_info["storage_root"]),
+        branch=branch_info["branch_name"],
+        id=entry_id,
+    )
+
+
+def _run_delete(branch_info, **kwargs):
+    args = _delete_args(branch_info, **kwargs)
+    out_buf = io.StringIO()
+    err_buf = io.StringIO()
+    with redirect_stdout(out_buf), redirect_stderr(err_buf):
+        code = cap.command_delete_entry(args)
+    return code, out_buf.getvalue(), err_buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
@@ -124,6 +142,30 @@ class TestRewriteEntryHappyPath:
         # auto-block survives intact
         assert AUTO_START in text and AUTO_END in text
         assert "auto block payload here" in text
+
+
+class TestDeleteEntryHappyPath:
+    def test_simple_delete_keeps_siblings(self, seed_branch_files):
+        branch = seed_branch_files({
+            "risks": (
+                "# 风险\n\n"
+                "## 阻塞与注意点\n\n"
+                "- 风险 A\n"
+                "- 风险 B\n"
+                "- 风险 C\n"
+            ),
+        })
+
+        code, out, err = _run_delete(branch, entry_id="risks::0::1")
+
+        assert code == 0, err
+        payload = json.loads(out)
+        assert payload["mode"] == "delete-entry"
+        assert payload["deleted_first_line"] == "风险 B"
+        text = branch["paths"]["risks"].read_text(encoding="utf-8")
+        assert "风险 A" in text
+        assert "风险 C" in text
+        assert "风险 B" not in text
 
 
 # ---------------------------------------------------------------------------

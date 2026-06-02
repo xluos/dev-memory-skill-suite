@@ -53,10 +53,11 @@ append 类 kind 写入前会对目标 section 做相似度查重，阻止 append
 - **行为**：命中拦下不写，`exit 2`，stdout 返 `dedup_hint` 含 `matches[]` + `recommendation`（`update_existing` / `review_and_decide`）
 - **agent 处理**：按 recommendation 分流：
   - 修订旧条目 → `dev-memory-cli capture rewrite-entry --id <match_id> --content <text>`（新 subcommand）
+  - 删除旧条目 → `dev-memory-cli capture delete-entry --id <match_id>`
   - 确实是独立新事实 → `dev-memory-cli capture record --force ...`（绕过查重）
   - 误判同义 / 暂不写 → 不调任何命令
 - **绕过**：`--force` flag；upsert 类 kind（progress / next / overview / scope / stage / constraint）天然跳过 dedup
-- **批量**：`--summary-json` 每条独立 check，blocked 项进 stdout `dedup_blocked[]`，未 blocked 部分照常写
+- **批量**：`record --summary-json` 每条独立 check，blocked 项进 stdout `dedup_blocked[]`，未 blocked 部分照常写；SessionEnd 自动总结优先走 `capture apply-summary-output --json`，支持 upsert / append / rewrite / delete 的结构化 patch
 - **调试 / 实验**：可用 `--dedup-threshold <float>`（隐藏参数，范围 (0.0, 1.0]）临时覆盖默认 0.7 阈值，生产场景不建议改
 
 ### Setup vs Tidy vs Graduate（三个整理动作的边界）
@@ -255,13 +256,16 @@ dev-memory-cli ui --read-only          # 禁用编辑回写
 | `SessionStart` | ✅ | ✅ | 跑 `context sync` 刷 progress.md auto 区，抽 14 段摘要 + 列权威记忆文件路径，注入会话上下文 |
 | `PreCompact` | ✅ | ✕ | **0.17 起 no-op**（SessionStart 已经刷过，重复跑无信号） |
 | `Stop` | ✅ | ✅ | 每次回复后落一个轻量 HEAD marker |
-| `SessionEnd` | ✅ | ✕ | 会话结束时再落一次最终 HEAD |
+| `SessionEnd` | ✅ | ✕ | 会话结束时再落一次最终 HEAD，并把 transcript 总结任务写入队列 |
 
 重要边界：
 
 - 本仓库只提供**模板 + CLI**，真正生效的是你本地 `.codex/hooks.json` / `.claude/settings.local.json` / `~/.codex/hooks.json` / `~/.claude/settings.json` 里有没有合并进来
 - hook 运行时统一走 `dev-memory-cli hook ...`，所以 CLI 必须在 PATH 上或可被 `npx` 解析
 - hook 只做**低摩擦恢复 + 轻量刷新**，不在 hook 里重写高语义正文
+- `SessionEnd` 只 enqueue 总结任务，不同步跑总结：任务写到 `<repo-memory>/jobs/session-summary/pending/*.json`，事件日志写到同目录 `events.jsonl`。同一 repo+branch+session 会更新同一个 job，避免短时间重复结束时冲突
+- enqueue 后是否启动后台 summarizer 由 `~/.dev-memory/config.json` 的 `session_summary.command` 决定；`install-hooks` 会扫描本地工具，按 `coco -> codex -> claude` 顺序写默认值。coco 默认用 `--session-id {summary_session_id}`，Claude 默认用 UUID 形态的 `{summary_session_uuid}`。hook 会启动后台 worker，worker 先确定性提取 transcript core messages + existing memory，写入 `<repo-memory>/jobs/session-summary/inputs/*.json`，再把这份 JSON 内联进 `{prompt}`；agent 只输出 summary-output JSON，不调用 CLI、不移动 job。worker 会校验 JSON，格式错误时用同一个 summary session 最多重试 3 次，然后由代码执行 `apply-summary-output` 并迁移 pending/done/failed
+- `DEV_MEMORY_SESSION_SUMMARY_CMD` 只作为临时调试 override；要禁用后台 summarizer，可清掉配置里的 `session_summary.command`，或设置 `DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT=1`
 - 全局 skill 安装不会自动加载 hook —— 这是一个 skill suite，不是独立 agent 插件
 
 ## CLI 入口
@@ -279,7 +283,7 @@ CLI 暴露的子命令：
 | 安装助手 | `dev-memory-cli install-hooks <codex\|claude\|--all>` | 把 hook 模板合并到目标配置 |
 | 浏览器 UI | `dev-memory-cli ui [--port N] [--read-only]` | 启动本地浏览器界面看/编辑记忆 |
 | 分支生命周期 | `dev-memory-cli branch [list\|inspect\|rename\|fork\|delete\|init]` | 分支记忆迁移 / 副本 / 重置（无参数 = 交互式 type-ahead）|
-| Skill 工作流（agent 在 SKILL.md 里调用，也能手动跑）| `dev-memory-cli capture <record\|rewrite-entry\|show\|suggest-kind\|...>` | 统一写入入口（含 0.18 起的 dedup 拦截 + rewrite-entry） |
+| Skill 工作流（agent 在 SKILL.md 里调用，也能手动跑）| `dev-memory-cli capture <record\|rewrite-entry\|delete-entry\|apply-summary-output\|show\|suggest-kind\|...>` | 统一写入入口（含 dedup、结构化 patch executor） |
 | | `dev-memory-cli setup <init\|merge-unsorted\|mark-completed>` | 整理 unsorted |
 | | `dev-memory-cli tidy <prepare\|apply>` | 浏览器化的批量 review + 落盘（0.18 起含 annotated md + delete-block）|
 | | `dev-memory-cli graduate <dry-run\|apply\|index>` | 分支归档 + 跨分支知识上提 |

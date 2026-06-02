@@ -534,6 +534,134 @@ def _replace_entry_at_index(body, target_idx, new_text):
     return "\n".join(out_lines).strip(), previous_first_line, found
 
 
+def _delete_entry_at_index(body, target_idx):
+    lines = body.splitlines()
+    out_lines = []
+    current_block_lines = None
+    current_idx = -1
+    counter = -1
+    found = False
+    previous_first_line = None
+
+    def capture_previous():
+        nonlocal previous_first_line
+        for ln in current_block_lines or []:
+            s = ln.strip()
+            if s.startswith("- "):
+                previous_first_line = s[2:].strip()
+                break
+            if s:
+                previous_first_line = s
+                break
+
+    def flush():
+        nonlocal current_block_lines, current_idx, found
+        if current_block_lines is None:
+            return
+        if current_idx == target_idx and not found:
+            capture_previous()
+            found = True
+        else:
+            out_lines.extend(current_block_lines)
+        current_block_lines = None
+        current_idx = -1
+
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped.startswith("- ") and not (raw.startswith(" ") or raw.startswith("\t")):
+            flush()
+            counter += 1
+            current_idx = counter
+            current_block_lines = [raw]
+        elif current_block_lines is not None and stripped and (raw.startswith(" ") or raw.startswith("\t")):
+            current_block_lines.append(raw)
+        elif not stripped:
+            flush()
+            out_lines.append(raw)
+        else:
+            flush()
+            out_lines.append(raw)
+    flush()
+
+    while out_lines and not out_lines[-1].strip():
+        out_lines.pop()
+
+    return "\n".join(out_lines).strip(), previous_first_line, found
+
+
+def _entry_mutation(paths, eid, *, new_text=None, delete=False):
+    parsed = _parse_entry_id_local((eid or "").strip())
+    if not parsed:
+        raise RuntimeError(f"malformed entry id: {eid!r}; expected <file_key>::<section_idx>::<entry_idx>")
+    file_key, section_idx, entry_idx = parsed
+    if file_key not in paths:
+        raise RuntimeError(f"unknown file_key {file_key!r}; available: {', '.join(sorted(paths.keys()))}")
+
+    if not delete and not (new_text or "").strip():
+        raise RuntimeError("one of --content / --content-file is required")
+
+    target_path = paths[file_key]
+    if not target_path.exists():
+        raise RuntimeError(f"file does not exist: {target_path}")
+
+    content = target_path.read_text(encoding="utf-8")
+    prefix, sections = split_sections(content)
+    if section_idx < 0 or section_idx >= len(sections):
+        raise RuntimeError(f"section_idx {section_idx} out of range (file has {len(sections)} sections)")
+
+    section_title, section_body = sections[section_idx]
+    mutator = _delete_entry_at_index if delete else (
+        lambda body, idx: _replace_entry_at_index(body, idx, new_text)
+    )
+
+    if AUTO_START in section_body and AUTO_END in section_body:
+        head_end = section_body.index(AUTO_START)
+        head = section_body[:head_end].rstrip()
+        tail = section_body[head_end:]
+        new_head, previous_first_line, found = mutator(head, entry_idx)
+        new_body = (new_head + "\n\n" + tail).strip() if new_head else tail.strip()
+    else:
+        new_body, previous_first_line, found = mutator(section_body, entry_idx)
+
+    if not found:
+        raise RuntimeError(f"entry_idx {entry_idx} not found in section {section_idx!r}")
+
+    new_sections = list(sections)
+    new_sections[section_idx] = (section_title, new_body)
+    target_path.write_text(join_sections(prefix, new_sections), encoding="utf-8")
+    return {
+        "id": eid,
+        "file_key": file_key,
+        "file": _label(file_key),
+        "section": section_title,
+        "previous_first_line": previous_first_line,
+    }
+
+
+def _validate_entry_reference(paths, eid, *, require_content=None):
+    parsed = _parse_entry_id_local((eid or "").strip())
+    if not parsed:
+        raise RuntimeError(f"malformed entry id: {eid!r}; expected <file_key>::<section_idx>::<entry_idx>")
+    file_key, section_idx, entry_idx = parsed
+    if file_key not in paths:
+        raise RuntimeError(f"unknown file_key {file_key!r}; available: {', '.join(sorted(paths.keys()))}")
+    if require_content is not None and not (require_content or "").strip():
+        raise RuntimeError(f"rewrite {eid!r} requires non-empty content")
+    target_path = paths[file_key]
+    if not target_path.exists():
+        raise RuntimeError(f"file does not exist: {target_path}")
+    content = target_path.read_text(encoding="utf-8")
+    _prefix, sections = split_sections(content)
+    if section_idx < 0 or section_idx >= len(sections):
+        raise RuntimeError(f"section_idx {section_idx} out of range (file has {len(sections)} sections)")
+    section_body = sections[section_idx][1]
+    if AUTO_START in section_body and AUTO_END in section_body:
+        section_body = section_body[:section_body.index(AUTO_START)].rstrip()
+    entries = {idx for idx, _text in _section_top_level_entries(section_body)}
+    if entry_idx not in entries:
+        raise RuntimeError(f"entry_idx {entry_idx} not found in section {section_idx!r}")
+
+
 # v2 KIND_MAP. `default_mode` governs whether a new entry accumulates
 # (append) or replaces the whole section (upsert). Accumulation fits
 # "decisions", "risks", "glossary" where each entry is independent and
@@ -582,6 +710,17 @@ SESSION_PAYLOAD_MAP = [
     ("source_updates", "shared-source", None),
 ]
 
+SESSION_DIRECT_PAYLOAD_MAP = [
+    ("progress", "progress"),
+    ("next", "next"),
+]
+
+SESSION_EXTRA_PAYLOAD_MAP = [
+    ("glossary", "glossary", None),
+    ("shared_context", "shared-context", None),
+    ("shared_sources", "shared-source", None),
+]
+
 
 def normalize_items(items):
     if items is None:
@@ -596,8 +735,19 @@ def bullets(items, empty_text="- 待补充", wrap_code=False):
     return render_bullets(normalize_items(items), empty_text=empty_text, wrap_code=wrap_code)
 
 
+def _decision_summary(item):
+    if isinstance(item, str):
+        return item.strip()
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("decision") or item.get("summary") or "").strip()
+
+
 def decision_body(item):
-    parts = [f"- 结论: {item['decision']}"]
+    summary = _decision_summary(item)
+    parts = [f"- 结论: {summary}"]
+    if not isinstance(item, dict):
+        return "\n".join(parts)
     if item.get("reason"):
         parts.append(f"- 原因: {item['reason']}")
     if item.get("impact"):
@@ -682,6 +832,22 @@ def _load_optional_text(value, file_path=None):
     if file_path:
         return (Path(file_path).read_text(encoding="utf-8").strip()) or None
     return None
+
+
+def _load_json_payload(value, file_path=None):
+    if value:
+        return json.loads(value)
+    if file_path:
+        return json.loads(Path(file_path).read_text(encoding="utf-8"))
+    raise RuntimeError("one of --json / --json-file is required")
+
+
+def _decision_content(item):
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        return decision_body(item)
+    return ""
 
 
 def _load_free_content(args):
@@ -846,8 +1012,18 @@ def command_record(args):
                 return None
             return _write_one(paths, kind, body, title_override=title_override)
 
+        # Worker-facing current-state fields. Keep these as plain text because
+        # progress/next sections are snapshots, not bullet-list accumulators.
+        for key, kind in SESSION_DIRECT_PAYLOAD_MAP:
+            items = normalize_items(payload.get(key))
+            if not items:
+                continue
+            rec = _write_or_block(kind, "\n".join(items), source_label=f"payload[{key}]")
+            if rec is not None:
+                touched.append(rec)
+
         # Simple scalar mappings.
-        for key, kind, subsection_title in SESSION_PAYLOAD_MAP:
+        for key, kind, subsection_title in SESSION_PAYLOAD_MAP + SESSION_EXTRA_PAYLOAD_MAP:
             items = normalize_items(payload.get(key))
             if not items:
                 continue
@@ -873,18 +1049,30 @@ def command_record(args):
             if rec is not None:
                 touched.append(rec)
 
-        # Structured decisions (decision/reason/impact trios).
-        decision_items = [decision_body(item) for item in (payload.get("decisions") or []) if item.get("decision")]
+        # Structured decisions (decision|summary/reason/impact trios).
+        decision_payload_items = [
+            item for item in (payload.get("decisions") or []) if _decision_summary(item)
+        ]
+        decision_items = [decision_body(item) for item in decision_payload_items]
         if decision_items:
             body = "\n\n".join(decision_items)
             rec = _write_or_block("decision", body, source_label="payload[decisions]")
             if rec is not None:
                 touched.append(rec)
-                for item in payload.get("decisions") or []:
-                    if item.get("decision"):
-                        pending = _maybe_stage_pending(paths, item["decision"], branch_name or "")
-                        if pending:
-                            touched.append(pending)
+                for item in decision_payload_items:
+                    pending = _maybe_stage_pending(paths, _decision_summary(item), branch_name or "")
+                    if pending:
+                        touched.append(pending)
+
+        shared_decision_payload_items = [
+            item for item in (payload.get("shared_decisions") or []) if _decision_summary(item)
+        ]
+        shared_decision_items = [decision_body(item) for item in shared_decision_payload_items]
+        if shared_decision_items:
+            body = "\n\n".join(shared_decision_items)
+            rec = _write_or_block("shared-decision", body, source_label="payload[shared_decisions]")
+            if rec is not None:
+                touched.append(rec)
 
         extra_manifest = {"last_session_sync_title": title, "last_session_sync_mode": "capture-session"}
 
@@ -1020,67 +1208,12 @@ def command_rewrite_entry(args):
     )
 
     eid = (args.id or "").strip()
-    parsed = _parse_entry_id_local(eid)
-    if not parsed:
-        print(json.dumps({
-            "error": f"malformed entry id: {eid!r}",
-            "expected_format": "<file_key>::<section_idx>::<entry_idx>",
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 1
-    file_key, section_idx, entry_idx = parsed
-    if file_key not in paths:
-        print(json.dumps({
-            "error": f"unknown file_key {file_key!r}",
-            "available_file_keys": sorted(paths.keys()),
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 1
-
     new_text = _load_optional_text(args.content, args.content_file)
-    if not new_text:
-        print(json.dumps({"error": "one of --content / --content-file is required"}, ensure_ascii=False, indent=2), file=sys.stderr)
+    try:
+        mutation = _entry_mutation(paths, eid, new_text=new_text)
+    except RuntimeError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
-
-    target_path = paths[file_key]
-    if not target_path.exists():
-        print(json.dumps({
-            "error": f"file does not exist: {target_path}",
-            "file_key": file_key,
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 1
-
-    content = target_path.read_text(encoding="utf-8")
-    prefix, sections = split_sections(content)
-    if section_idx < 0 or section_idx >= len(sections):
-        print(json.dumps({
-            "error": f"section_idx {section_idx} out of range (file has {len(sections)} sections)",
-            "id": eid,
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 1
-
-    section_title, section_body = sections[section_idx]
-
-    # Preserve any AUTO-GENERATED block: rewrite only the body before
-    # AUTO_START, then re-attach the block as-is. Matches tidy's behavior so
-    # progress.md auto-blocks survive rewrite-entry calls.
-    if AUTO_START in section_body and AUTO_END in section_body:
-        head_end = section_body.index(AUTO_START)
-        head = section_body[:head_end].rstrip()
-        tail = section_body[head_end:]
-        new_head, previous_first_line, found = _replace_entry_at_index(head, entry_idx, new_text)
-        new_body = (new_head + "\n\n" + tail).strip() if new_head else tail.strip()
-    else:
-        new_body, previous_first_line, found = _replace_entry_at_index(section_body, entry_idx, new_text)
-
-    if not found:
-        print(json.dumps({
-            "error": f"entry_idx {entry_idx} not found in section {section_idx!r}",
-            "id": eid,
-        }, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 1
-
-    new_sections = list(sections)
-    new_sections[section_idx] = (section_title, new_body)
-    target_path.write_text(join_sections(prefix, new_sections), encoding="utf-8")
 
     # Manifest bookkeeping (same shape as record).
     manifest = read_json(paths["manifest"])
@@ -1098,8 +1231,8 @@ def command_rewrite_entry(args):
             "last_capture_mode": "rewrite-entry",
             "last_capture_update_mode": "rewrite-entry",
             "last_capture_targets": [{
-                "file": _label(file_key),
-                "section": section_title,
+                "file": mutation["file"],
+                "section": mutation["section"],
                 "mode": "rewrite-entry",
                 "id": eid,
             }],
@@ -1112,21 +1245,222 @@ def command_rewrite_entry(args):
     _emit_capture_log(
         paths,
         action="rewrite-entry",
-        kind_label=file_key,
+        kind_label=mutation["file_key"],
         summary=new_first_line,
-        touched=[{"file": _label(file_key), "section": section_title, "mode": "rewrite-entry"}],
-        extra_details=[("id", eid), ("previous", previous_first_line)],
+        touched=[{"file": mutation["file"], "section": mutation["section"], "mode": "rewrite-entry"}],
+        extra_details=[("id", eid), ("previous", mutation["previous_first_line"])],
     )
 
     print(json.dumps({
         "mode": "rewrite-entry",
         "id": eid,
-        "file": _label(file_key),
-        "section": section_title,
-        "previous_first_line": previous_first_line,
+        "file": mutation["file"],
+        "section": mutation["section"],
+        "previous_first_line": mutation["previous_first_line"],
         "new_first_line": new_first_line,
         "updated_at": updated_at,
     }, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_delete_entry(args):
+    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
+        args.repo, args.context_dir, args.branch
+    )
+    eid = (args.id or "").strip()
+    try:
+        mutation = _entry_mutation(paths, eid, delete=True)
+    except RuntimeError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 1
+
+    manifest = read_json(paths["manifest"])
+    updated_at = now_iso()
+    manifest.update({
+        "repo_root": str(repo_root),
+        "repo_key": repo_key,
+        "branch": branch_name,
+        "branch_key": branch_key,
+        "storage_root": str(storage_root),
+        "updated_at": updated_at,
+        "last_seen_head": get_head_commit(repo_root) if repo_root else None,
+        "last_capture_kind": None,
+        "last_capture_mode": "delete-entry",
+        "last_capture_update_mode": "delete-entry",
+        "last_capture_targets": [{
+            "file": mutation["file"],
+            "section": mutation["section"],
+            "mode": "delete-entry",
+            "id": eid,
+        }],
+    })
+    write_json(paths["manifest"], manifest)
+
+    _emit_capture_log(
+        paths,
+        action="delete-entry",
+        kind_label=mutation["file_key"],
+        summary=mutation["previous_first_line"] or eid,
+        touched=[{"file": mutation["file"], "section": mutation["section"], "mode": "delete-entry"}],
+        extra_details=[("id", eid)],
+    )
+
+    print(json.dumps({
+        "mode": "delete-entry",
+        "id": eid,
+        "file": mutation["file"],
+        "section": mutation["section"],
+        "deleted_first_line": mutation["previous_first_line"],
+        "updated_at": updated_at,
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_apply_summary_output(args):
+    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
+        args.repo, args.context_dir, args.branch
+    )
+    payload = _load_json_payload(args.json, args.json_file)
+    if not isinstance(payload, dict):
+        raise RuntimeError("summary output must be a JSON object")
+
+    touched = []
+    actions = []
+    dedup_blocked = []
+    force = bool(getattr(args, "force", False))
+
+    # Preflight destructive/targeted edits before any write happens. This
+    # avoids a partial upsert/append landing before a later bad entry id fails.
+    for item in payload.get("rewrites") or []:
+        _validate_entry_reference(paths, item.get("id"), require_content=item.get("content"))
+    for item in payload.get("deletes") or []:
+        _validate_entry_reference(paths, item.get("id"))
+
+    def add_write(kind, content, *, mode_override=None, source=None):
+        if not kind:
+            return
+        if kind not in KIND_MAP:
+            raise RuntimeError(f"unsupported kind in summary output: {kind}")
+        body = "\n".join(normalize_items(content))
+        if not body:
+            return
+        mode = mode_override or KIND_MAP[kind].get("default_mode", "upsert")
+        if mode == "append":
+            hint = _check_dedup_for_kind(paths, kind, body, force=force)
+            if hint is not None:
+                dedup_blocked.append({
+                    "source": source,
+                    "kind": kind,
+                    "content_preview": _first_nonempty_line(body)[:_SIM_PREVIEW_LEN],
+                    "dedup_hint": hint,
+                })
+                return
+        rec = _write_one(paths, kind, body, mode_override=mode_override)
+        touched.append(rec)
+        actions.append({
+            "op": mode,
+            "kind": kind,
+            "source": source,
+            "target": rec,
+        })
+
+    # Convenience summary-output fields. These mirror --summary-json but keep
+    # execution in code instead of making the agent compose CLI calls.
+    add_write("progress", payload.get("progress"), source="progress")
+    add_write("next", payload.get("next"), source="next")
+    for item in payload.get("decisions") or []:
+        add_write("decision", _decision_content(item), source="decisions")
+    for item in payload.get("risks") or []:
+        add_write("risk", item, source="risks")
+    for item in payload.get("glossary") or []:
+        add_write("glossary", item, source="glossary")
+    for item in payload.get("shared_decisions") or []:
+        add_write("shared-decision", _decision_content(item), source="shared_decisions")
+    for item in payload.get("shared_context") or []:
+        add_write("shared-context", item, source="shared_context")
+    for item in payload.get("shared_sources") or []:
+        add_write("shared-source", item, source="shared_sources")
+
+    # Explicit patch operations.
+    for item in payload.get("upserts") or []:
+        add_write(item.get("kind"), item.get("content"), mode_override="upsert", source="upserts")
+    for item in payload.get("appends") or []:
+        add_write(item.get("kind"), item.get("content"), mode_override="append", source="appends")
+    for item in payload.get("rewrites") or []:
+        mutation = _entry_mutation(paths, item.get("id"), new_text=item.get("content"))
+        touched.append({"file": mutation["file"], "section": mutation["section"], "mode": "rewrite-entry"})
+        actions.append({
+            "op": "rewrite-entry",
+            "id": mutation["id"],
+            "file": mutation["file"],
+            "section": mutation["section"],
+            "previous_first_line": mutation["previous_first_line"],
+            "reason": item.get("reason"),
+        })
+    for item in payload.get("deletes") or []:
+        mutation = _entry_mutation(paths, item.get("id"), delete=True)
+        touched.append({"file": mutation["file"], "section": mutation["section"], "mode": "delete-entry"})
+        actions.append({
+            "op": "delete-entry",
+            "id": mutation["id"],
+            "file": mutation["file"],
+            "section": mutation["section"],
+            "deleted_first_line": mutation["previous_first_line"],
+            "reason": item.get("reason"),
+        })
+
+    updated_at = now_iso()
+    manifest = read_json(paths["manifest"])
+    manifest.update({
+        "repo_root": str(repo_root),
+        "repo_key": repo_key,
+        "branch": branch_name,
+        "branch_key": branch_key,
+        "storage_root": str(storage_root),
+        "updated_at": updated_at,
+        "last_seen_head": get_head_commit(repo_root) if repo_root else None,
+        "last_capture_kind": "summary-output",
+        "last_capture_mode": "apply-summary-output",
+        "last_capture_update_mode": "apply-summary-output",
+        "last_capture_targets": touched,
+    })
+    write_json(paths["manifest"], manifest)
+
+    repo_manifest = read_json(paths["repo_manifest"])
+    repo_manifest.update({
+        "repo_root": str(repo_root),
+        "repo_key": repo_key,
+        "storage_root": str(storage_root),
+        "updated_at": updated_at,
+        "last_seen_branch": branch_name,
+        "last_seen_head": manifest["last_seen_head"],
+    })
+    write_json(paths["repo_manifest"], repo_manifest)
+
+    if touched:
+        _emit_capture_log(
+            paths,
+            action="apply-summary-output",
+            kind_label="summary-output",
+            summary=payload.get("title") or f"{len(touched)} target(s)",
+            touched=touched,
+        )
+
+    output = {
+        "mode": "apply-summary-output",
+        "repo_root": str(repo_root),
+        "repo_key": repo_key,
+        "branch": branch_name,
+        "touched_targets": touched,
+        "actions": actions,
+        "skip_reason": payload.get("skip_reason") if not touched else None,
+        "updated_at": updated_at,
+    }
+    if dedup_blocked:
+        output["dedup_blocked"] = dedup_blocked
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 2
+    print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1315,6 +1649,22 @@ def main():
     rewrite.add_argument("--content", help="Inline markdown content to replace the entry with")
     rewrite.add_argument("--content-file", help="File containing replacement markdown content")
 
+    delete = subparsers.add_parser(
+        "delete-entry",
+        help="Delete an existing entry by id",
+    )
+    _add_common_args(delete)
+    delete.add_argument("--id", required=True, help="Entry id in the form <file_key>::<section_idx>::<entry_idx>")
+
+    apply_summary = subparsers.add_parser(
+        "apply-summary-output",
+        help="Apply a structured summary-output JSON patch",
+    )
+    _add_common_args(apply_summary)
+    apply_summary.add_argument("--json", help="Inline summary-output JSON")
+    apply_summary.add_argument("--json-file", help="File containing summary-output JSON")
+    apply_summary.add_argument("--force", action="store_true", help="Skip dedup checks for append operations")
+
     sync = subparsers.add_parser("sync-working-tree", help="Refresh progress.md auto-sync block from git facts")
     _add_common_args(sync)
 
@@ -1330,6 +1680,8 @@ def main():
             "classify": command_classify,
             "record": command_record,
             "rewrite-entry": command_rewrite_entry,
+            "delete-entry": command_delete_entry,
+            "apply-summary-output": command_apply_summary_output,
             "sync-working-tree": command_sync_working_tree,
             "record-head": command_record_head,
         }

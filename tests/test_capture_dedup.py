@@ -318,6 +318,41 @@ class TestCommandRecordDedupIntegration:
         blocked_kinds = {entry["kind"] for entry in out["dedup_blocked"]}
         assert "decision" in blocked_kinds
 
+    def test_summary_json_accepts_worker_schema(self, branch_dir):
+        payload = {
+            "title": "worker checkpoint",
+            "progress": "当前已经完成昵称来源切换",
+            "next": "验证未签协议场景",
+            "decisions": [
+                {"summary": "管理员昵称读取 IpContext", "reason": "AdminContext 未签协议时为空", "impact": "admin workbench"},
+            ],
+            "glossary": ["IpContext.userProfileResp.nick_name 是当前用户昵称来源"],
+            "shared_decisions": [
+                {"summary": "工作台当前态优先覆盖 progress/next", "reason": "避免历史状态无限追加", "impact": "session summary"},
+            ],
+            "shared_context": ["自动总结前先读取现有记忆"],
+            "shared_sources": ["docs/dev-memory-skill-suite-guide.md"],
+        }
+        code, out = _run_record(
+            branch_dir, summary_json=json.dumps(payload, ensure_ascii=False),
+        )
+
+        assert code == 0
+        touched = {(item["file"], item["section"]) for item in out["touched_targets"]}
+        assert ("branch/progress.md", "当前进展") in touched
+        assert ("branch/progress.md", "下一步") in touched
+        assert ("branch/decisions.md", "关键决策与原因") in touched
+        assert ("branch/glossary.md", "当前有效上下文") in touched
+        assert ("repo/decisions.md", "跨分支通用决策") in touched
+        assert ("repo/glossary.md", "长期有效背景") in touched
+        assert ("repo/glossary.md", "共享入口") in touched
+
+        progress = branch_dir["paths"]["progress"].read_text(encoding="utf-8")
+        assert "当前已经完成昵称来源切换" in progress
+        assert "验证未签协议场景" in progress
+        decisions = branch_dir["paths"]["decisions"].read_text(encoding="utf-8")
+        assert "管理员昵称读取 IpContext" in decisions
+
 
 # ---------------------------------------------------------------------------
 # Edge-case regressions

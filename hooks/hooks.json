@@ -52,7 +52,7 @@
             "timeout": 15
           }
         ],
-        "description": "Persist final HEAD marker at session end",
+        "description": "Persist final HEAD marker and enqueue transcript summary work",
         "id": "dev-memory:session-end"
       }
     ]
