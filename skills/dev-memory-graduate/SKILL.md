@@ -92,6 +92,8 @@ npx dev-memory-cli graduate apply \
 - 如 `archive: true`（默认），分支目录搬到 `branches/_archived/<branch>__<date>/`
 - `_archived/INDEX.md` 追加一行索引
 
+并发语义：`apply` 会先做 harvest/schema/branch pre-flight；pre-flight 失败会立即返回。pre-flight 通过后，真正写 repo 共享层和归档 branch 的阶段按 repo memory 目录串行排队，后发会话会等待前一个 `apply` 释放队列锁后再继续。
+
 ### Step 4: 查索引
 
 ```bash

@@ -10,6 +10,8 @@ the heuristic missed, but the primary signal is pending-promotion.
 """
 
 import argparse
+import contextlib
+import fcntl
 import json
 import sys
 from datetime import datetime, timezone
@@ -130,21 +132,11 @@ def _apply_entries(target_path, entries):
     return n
 
 
-def command_apply(args):
-    if detect_no_git_mode(args.repo):
-        print(json.dumps({"error": "no-git mode: graduate has nothing to archive"}, ensure_ascii=False))
-        return 1
-
-    repo_root, branch_name, branch_key, _, repo_key, repo_dir, branch_dir = get_branch_paths(args.repo, args.context_dir, args.branch)
-
-    if not branch_dir.exists():
-        print(json.dumps({"error": f"branch memory not initialized: {branch_dir}"}, ensure_ascii=False))
-        return 1
-
-    harvest = read_json(Path(args.harvest_file))
+def _load_harvest(harvest_file):
+    harvest_path = Path(harvest_file)
+    harvest = read_json(harvest_path)
     if not harvest:
-        print(json.dumps({"error": f"harvest file empty or missing: {args.harvest_file}"}, ensure_ascii=False))
-        return 1
+        raise ValueError(f"harvest file empty or missing: {harvest_file}")
 
     # Reject unknown top-level keys explicitly. The most common failure mode
     # is a pre-v2 harvest.json still using repo_context / repo_sources —
@@ -160,13 +152,74 @@ def command_apply(args):
                 " (v1 schema? repo_context → repo_decisions or repo_glossary; "
                 "repo_sources → repo_glossary; see references/harvest-schema.md)"
             )
-        print(
-            json.dumps(
-                {"error": f"unknown harvest key(s): {unknown_keys}{legacy_hint}"},
-                ensure_ascii=False,
+        raise ValueError(f"unknown harvest key(s): {unknown_keys}{legacy_hint}")
+    return harvest
+
+
+def _resolve_apply_context(args):
+    if detect_no_git_mode(args.repo):
+        raise ValueError("no-git mode: graduate has nothing to archive")
+
+    repo_root, branch_name, branch_key, _, repo_key, repo_dir, branch_dir = get_branch_paths(
+        args.repo,
+        args.context_dir,
+        args.branch,
+    )
+    if not branch_dir.exists():
+        raise ValueError(f"branch memory not initialized: {branch_dir}")
+
+    return {
+        "repo_root": repo_root,
+        "branch_name": branch_name,
+        "branch_key": branch_key,
+        "repo_key": repo_key,
+        "repo_dir": repo_dir,
+        "branch_dir": branch_dir,
+    }
+
+
+def _graduate_apply_lock_path(repo_dir):
+    return Path(repo_dir) / "jobs" / "graduate-apply.lock"
+
+
+@contextlib.contextmanager
+def _graduate_apply_queue(repo_dir):
+    """Serialize graduate apply per repo memory directory.
+
+    Pre-flight validation happens before this context. The lock only protects
+    repo-shared writes + branch archive moves, so independent invocations can
+    still fail fast on bad harvest files before waiting behind a long apply.
+    """
+    lock_path = _graduate_apply_lock_path(repo_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_fh:
+        waited = False
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            waited = True
+            print(
+                f"[dev-memory][graduate] another apply is running; queued on {lock_path}",
+                file=sys.stderr,
             )
-        )
-        return 1
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            yield waited
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _apply_validated(context, harvest, *, queue_waited=False):
+    repo_root = context["repo_root"]
+    branch_name = context["branch_name"]
+    branch_key = context["branch_key"]
+    repo_dir = context["repo_dir"]
+    branch_dir = context["branch_dir"]
+
+    # The branch may have been archived by an earlier queued apply while this
+    # process was waiting. Re-check inside the critical section before writing.
+    if not branch_dir.exists():
+        raise ValueError(f"branch memory not initialized: {branch_dir}")
 
     paths = asset_paths(repo_dir, branch_dir)
 
@@ -226,8 +279,18 @@ def command_apply(args):
         "harvested_total": total,
         "archive_summary": str((archive_dst or branch_dir) / "archive_summary.md"),
         "archived_to": str(archive_dst) if archive_dst else None,
+        "queue_waited": queue_waited,
     }, ensure_ascii=False, indent=2))
     return 0
+
+
+def command_apply(args):
+    # Pre-flight first: bad input should return immediately even if another
+    # session is currently applying a valid graduate harvest.
+    context = _resolve_apply_context(args)
+    harvest = _load_harvest(args.harvest_file)
+    with _graduate_apply_queue(context["repo_dir"]) as waited:
+        return _apply_validated(context, harvest, queue_waited=waited)
 
 
 def command_index(args):
