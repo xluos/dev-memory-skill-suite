@@ -45,7 +45,7 @@
   <!-- Header -->
   <rect x="40" y="30" width="1320" height="74" rx="14" fill="url(#header-grad)" filter="url(#shadow)"/>
   <text x="70" y="68" font-size="22" font-weight="700" fill="#f8fafc">Storage Layout</text>
-  <text x="70" y="92" font-size="13" fill="#cbd5e1">repo + branch 双层 · v2 八件套 · graduate 上提 + _archived 归档</text>
+  <text x="70" y="92" font-size="13" fill="#cbd5e1">repo + branch 双层 · v2 九件套 · graduate 上提 + _archived 归档</text>
   <text x="1330" y="68" font-size="14" fill="#a5b4fc" text-anchor="end" font-family="ui-monospace,monospace">~/.dev-memory/repos/&lt;repo-key&gt;/</text>
   <text x="1330" y="92" font-size="11" fill="#64748b" text-anchor="end" font-family="ui-monospace,monospace">repo-key = sanitize(name)-sha1(identity)[:12]</text>
 
@@ -61,7 +61,7 @@
   <!-- ============== REPO/ shelf (left) ============== -->
   <g transform="translate(70, 200)">
     <!-- container -->
-    <rect x="0" y="0" width="380" height="640" rx="14" fill="url(#repo-shelf)" stroke="#0891b2" stroke-width="2" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="380" height="660" rx="14" fill="url(#repo-shelf)" stroke="#0891b2" stroke-width="2" filter="url(#shadow)"/>
 
     <!-- header bar -->
     <rect x="0" y="0" width="380" height="64" rx="14" fill="#0891b2"/>
@@ -96,14 +96,20 @@
       <text x="20" y="244" font-size="13" font-weight="700" font-family="ui-monospace,monospace" fill="#0e7490">glossary.md</text>
       <text x="20" y="266" font-size="11" fill="#475569">仓库术语表 · 概念锚点 · 命名约定</text>
 
+      <!-- log.md -->
+      <rect x="0" y="296" width="340" height="58" rx="8" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#soft-shadow)"/>
+      <rect x="0" y="296" width="5" height="58" rx="2.5" fill="#64748b"/>
+      <text x="20" y="318" font-size="13" font-weight="700" font-family="ui-monospace,monospace" fill="#334155">log.md</text>
+      <text x="20" y="340" font-size="11" fill="#475569">仓库事件日志 · graduate / shared-* capture 镜像</text>
+
       <!-- artifacts/ -->
-      <rect x="0" y="296" width="340" height="58" rx="8" fill="white" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3" filter="url(#soft-shadow)"/>
-      <rect x="0" y="296" width="5" height="58" rx="2.5" fill="#94a3b8"/>
-      <text x="20" y="318" font-size="13" font-weight="700" font-family="ui-monospace,monospace" fill="#475569">📁 artifacts/</text>
-      <text x="20" y="340" font-size="11" fill="#64748b">长期产物 · 文档导出 · 大文件附件</text>
+      <rect x="0" y="370" width="340" height="58" rx="8" fill="white" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3" filter="url(#soft-shadow)"/>
+      <rect x="0" y="370" width="5" height="58" rx="2.5" fill="#94a3b8"/>
+      <text x="20" y="392" font-size="13" font-weight="700" font-family="ui-monospace,monospace" fill="#475569">📁 artifacts/</text>
+      <text x="20" y="414" font-size="11" fill="#64748b">长期产物 · 文档导出 · 大文件附件</text>
 
       <!-- legend at bottom of repo shelf -->
-      <g transform="translate(0, 400)">
+      <g transform="translate(0, 452)">
         <rect x="0" y="0" width="340" height="100" rx="8" fill="#cffafe" opacity="0.5"/>
         <text x="14" y="22" font-size="11" font-weight="700" fill="#0e7490">写入路径</text>
         <text x="14" y="42" font-size="10" fill="#475569">capture record --kind X · 默认本分支</text>
@@ -116,7 +122,7 @@
   <!-- ============== BRANCHES/ shelf (right) ============== -->
   <g transform="translate(490, 200)">
     <!-- container -->
-    <rect x="0" y="0" width="840" height="640" rx="14" fill="url(#branch-shelf)" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
+    <rect x="0" y="0" width="840" height="660" rx="14" fill="url(#branch-shelf)" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
 
     <!-- header bar -->
     <rect x="0" y="0" width="840" height="64" rx="14" fill="#10b981"/>
@@ -193,12 +199,18 @@
         <text x="614" y="36" font-size="9" fill="#475569">跨分支候选 · graduate staging</text>
       </g>
 
-      <!-- row 3 (artifacts/history full width) -->
+      <!-- row 3 (log.md + artifacts dirs) -->
       <g transform="translate(20, 184)">
-        <rect x="0" y="0" width="380" height="46" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
-        <rect x="0" y="0" width="4" height="46" rx="2" fill="#94a3b8"/>
-        <text x="14" y="20" font-size="11" font-weight="700" font-family="ui-monospace,monospace" fill="#475569">📁 artifacts/</text>
-        <text x="14" y="36" font-size="9" fill="#64748b">分支产物 · capture 注入 · 大文件不进 md</text>
+        <!-- log.md -->
+        <rect x="0" y="0" width="180" height="46" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+        <rect x="0" y="0" width="4" height="46" rx="2" fill="#64748b"/>
+        <text x="14" y="20" font-size="11" font-weight="700" font-family="ui-monospace,monospace" fill="#334155">log.md</text>
+        <text x="14" y="36" font-size="9" fill="#475569">append-only 事件时间线</text>
+
+        <rect x="200" y="0" width="180" height="46" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
+        <rect x="200" y="0" width="4" height="46" rx="2" fill="#94a3b8"/>
+        <text x="214" y="20" font-size="11" font-weight="700" font-family="ui-monospace,monospace" fill="#475569">📁 artifacts/</text>
+        <text x="214" y="36" font-size="9" fill="#64748b">分支产物 · 大文件不进 md</text>
 
         <rect x="400" y="0" width="380" height="46" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,3"/>
         <rect x="400" y="0" width="4" height="46" rx="2" fill="#94a3b8"/>
@@ -224,7 +236,7 @@
 
         <!-- file count badge -->
         <rect x="640" y="-2" width="140" height="22" rx="11" fill="white" stroke="#10b981" stroke-width="1"/>
-        <text x="710" y="13" font-size="10" font-weight="700" fill="#047857" text-anchor="middle">v2 · 八件套 + 2 dirs</text>
+        <text x="710" y="13" font-size="10" font-weight="700" fill="#047857" text-anchor="middle">v2 · 九件套 + 2 dirs</text>
       </g>
     </g>
 

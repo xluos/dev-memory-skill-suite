@@ -178,13 +178,13 @@
 
   <rect x="80" y="935" width="1280" height="80" rx="12" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6,4"/>
 
-  <rect x="105" y="955" width="290" height="44" rx="6" fill="white" stroke="#94a3b8" stroke-width="1"/>
+  <rect x="105" y="955" width="320" height="44" rx="6" fill="white" stroke="#94a3b8" stroke-width="1"/>
   <text x="125" y="975" font-size="12" font-weight="700" fill="#0f172a">📁 repo/  · 跨分支共享层</text>
-  <text x="125" y="992" font-size="10" fill="#64748b" font-family="ui-monospace,monospace">overview · decisions · glossary · manifest</text>
+  <text x="125" y="992" font-size="10" fill="#64748b" font-family="ui-monospace,monospace">overview · decisions · glossary · log · manifest</text>
 
-  <rect x="415" y="955" width="620" height="44" rx="6" fill="#ecfeff" stroke="#06b6d4" stroke-width="1.5"/>
-  <text x="435" y="975" font-size="12" font-weight="700" fill="#0e7490">📁 branches/&lt;active&gt;/  · 当前分支（per-branch 隔离）</text>
-  <text x="435" y="992" font-size="10" fill="#475569" font-family="ui-monospace,monospace">overview · progress · risks · decisions · glossary · unsorted · pending-promotion · manifest</text>
+  <rect x="435" y="955" width="600" height="44" rx="6" fill="#ecfeff" stroke="#06b6d4" stroke-width="1.5"/>
+  <text x="455" y="975" font-size="12" font-weight="700" fill="#0e7490">📁 branches/&lt;active&gt;/  · 当前分支（per-branch 隔离）</text>
+  <text x="455" y="992" font-size="10" fill="#475569" font-family="ui-monospace,monospace">overview · progress · risks · decisions · glossary · log · unsorted · pending-promotion · manifest</text>
 
   <rect x="1055" y="955" width="285" height="44" rx="6" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,3"/>
   <text x="1075" y="975" font-size="12" font-weight="700" fill="#475569">📁 branches/_archived/  · 历史</text>
