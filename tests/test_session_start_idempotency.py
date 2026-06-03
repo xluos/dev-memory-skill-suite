@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from _common import (  # noqa: E402
     record_session_start_injected,
     session_start_already_injected,
 )
+import session_start as session_start_hook  # noqa: E402
 
 
 def test_session_start_marker_skips_same_session(branch_dir):
@@ -62,3 +64,29 @@ def test_session_start_marker_can_fallback_to_transcript_path(branch_dir):
     record_session_start_injected(assets, hook_input)
 
     assert session_start_already_injected(assets, hook_input) is True
+
+
+def test_session_start_duplicate_returns_empty_payload(branch_dir, monkeypatch, capsys):
+    assets = {
+        "repo_root": branch_dir["repo_root"],
+        "repo_key": branch_dir["branch_dir"].parents[1].name,
+        "repo_dir": branch_dir["branch_dir"].parents[1],
+        "branch_name": branch_dir["branch_name"],
+        "branch_key": branch_dir["branch_dir"].name,
+    }
+    hook_input = {"session_id": "session-1"}
+    record_session_start_injected(assets, hook_input)
+
+    monkeypatch.setattr(session_start_hook, "is_workspace_mode", lambda: False)
+    monkeypatch.setattr(session_start_hook, "resolve_assets", lambda: assets)
+    monkeypatch.setattr(session_start_hook, "read_hook_input", lambda: hook_input)
+
+    def fail_resolve_context():
+        raise AssertionError("duplicate SessionStart should not build context")
+
+    monkeypatch.setattr(session_start_hook, "_resolve_context", fail_resolve_context)
+
+    assert session_start_hook.main() == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {}
+    assert "duplicate injection skipped" in captured.err

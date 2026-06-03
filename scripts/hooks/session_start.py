@@ -31,10 +31,9 @@ def main():
         if not is_workspace_mode():
             assets = resolve_assets()
             if session_start_already_injected(assets, hook_input):
-                additional_context = (
-                    "dev-memory SessionStart 已在当前 session 注入过，"
-                    "本次 resume 跳过重复上下文注入。"
-                )
+                log("[dev-memory][SessionStart] duplicate injection skipped")
+                print(json.dumps({}, ensure_ascii=False))
+                return 0
             else:
                 additional_context = _resolve_context()
                 record_session_start_injected(assets, hook_input)

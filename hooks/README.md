@@ -55,7 +55,7 @@ dev-memory-cli install-hooks claude
 
 - `SessionStart`
   读取当前 repo+branch 的 dev-memory，并把可恢复上下文注入新会话；同一 session resume 重触发时通过
-  `<repo-memory>/jobs/session-start/injected/*.json` 幂等跳过重复大段注入
+  `<repo-memory>/jobs/session-start/injected/*.json` 幂等跳过重复注入，只写 skip 日志并返回空 payload
 - `PreCompact`
   在上下文压缩前刷新 working-tree 派生导航信息
 - `Stop`
