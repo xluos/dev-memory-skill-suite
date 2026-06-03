@@ -271,7 +271,7 @@ dev-memory-cli ui --read-only          # 禁用编辑回写
 - hook 运行时统一走 `dev-memory-cli hook ...`，所以 CLI 必须在 PATH 上或可被 `npx` 解析
 - hook 只做**低摩擦恢复 + 轻量刷新**，不在 hook 里重写高语义正文
 - `SessionEnd` 只 enqueue 总结任务，不同步跑总结：任务写到 `<repo-memory>/jobs/session-summary/pending/*.json`，事件日志写到同目录 `events.jsonl`。同一 repo+branch+session 会更新同一个 job，避免短时间重复结束时冲突
-- enqueue 后是否启动后台 summarizer 由 `~/.dev-memory/config.json` 的 `session_summary.command` 决定；`install-hooks` 会扫描本地工具，按 `coco -> codex -> claude` 顺序写默认值。coco 默认用 `--session-id {summary_session_id}`，Claude 默认用 UUID 形态的 `{summary_session_uuid}`。hook 会启动后台 worker，worker 先确定性提取 transcript core messages + existing memory，写入 `<repo-memory>/jobs/session-summary/inputs/*.json`，再把这份 JSON 内联进 `{prompt}`；agent 只输出 summary-output JSON，不调用 CLI、不移动 job。worker 会校验 JSON，格式错误时用同一个 summary session 最多重试 3 次，然后由代码执行 `apply-summary-output` 并迁移 pending/done/failed
+- enqueue 后是否启动后台 summarizer 由 `~/.dev-memory/config.json` 的 `session_summary.command` 决定；`install-hooks` 会扫描本地工具，按 `coco -> codex -> claude` 顺序写默认值。coco 默认用 `--session-id {summary_session_id}`，Claude 默认用 UUID 形态的 `{summary_session_uuid}`。hook 会启动后台 worker，worker 先确定性提取 transcript core messages + existing memory，写入 `<repo-memory>/jobs/session-summary/inputs/*.json`，再把这份 JSON 内联进 `{prompt}`；agent 只输出 summary-output JSON，不调用 CLI、不移动 job。worker 会校验 JSON，格式错误时用同一个 summary session 最多重试 3 次，然后由代码执行 `apply-summary-output` 并迁移 pending/done/skipped/failed；无 touched targets 的空总结进入 `skipped/`，不刷新 capture manifest，不算真实落盘
 - `DEV_MEMORY_SESSION_SUMMARY_CMD` 只作为临时调试 override；要禁用后台 summarizer，可清掉配置里的 `session_summary.command`，或设置 `DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT=1`
 - 全局 skill 安装不会自动加载 hook —— 这是一个 skill suite，不是独立 agent 插件
 

@@ -104,6 +104,20 @@ def test_apply_summary_output_blocks_duplicate_appends(branch_dir):
     assert decisions.count("重复决策") == 1
 
 
+def test_apply_summary_output_noop_does_not_update_capture_manifest(branch_dir):
+    manifest_path = branch_dir["paths"]["manifest"]
+    before = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    code, out = _run_apply(branch_dir, {"title": "无新增核心消息", "skip_reason": "没有新增有效内容"})
+
+    assert code == 0
+    assert out["touched_targets"] == []
+    assert out["actions"] == []
+    assert out["skip_reason"] == "没有新增有效内容"
+    after = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert after == before
+
+
 def test_apply_summary_output_preflights_targeted_edits(seed_branch_files):
     branch = seed_branch_files({
         "progress": (

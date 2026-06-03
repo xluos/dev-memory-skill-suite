@@ -1410,34 +1410,35 @@ def command_apply_summary_output(args):
         })
 
     updated_at = now_iso()
-    manifest = read_json(paths["manifest"])
-    manifest.update({
-        "repo_root": str(repo_root),
-        "repo_key": repo_key,
-        "branch": branch_name,
-        "branch_key": branch_key,
-        "storage_root": str(storage_root),
-        "updated_at": updated_at,
-        "last_seen_head": get_head_commit(repo_root) if repo_root else None,
-        "last_capture_kind": "summary-output",
-        "last_capture_mode": "apply-summary-output",
-        "last_capture_update_mode": "apply-summary-output",
-        "last_capture_targets": touched,
-    })
-    write_json(paths["manifest"], manifest)
-
-    repo_manifest = read_json(paths["repo_manifest"])
-    repo_manifest.update({
-        "repo_root": str(repo_root),
-        "repo_key": repo_key,
-        "storage_root": str(storage_root),
-        "updated_at": updated_at,
-        "last_seen_branch": branch_name,
-        "last_seen_head": manifest["last_seen_head"],
-    })
-    write_json(paths["repo_manifest"], repo_manifest)
 
     if touched:
+        manifest = read_json(paths["manifest"])
+        manifest.update({
+            "repo_root": str(repo_root),
+            "repo_key": repo_key,
+            "branch": branch_name,
+            "branch_key": branch_key,
+            "storage_root": str(storage_root),
+            "updated_at": updated_at,
+            "last_seen_head": get_head_commit(repo_root) if repo_root else None,
+            "last_capture_kind": "summary-output",
+            "last_capture_mode": "apply-summary-output",
+            "last_capture_update_mode": "apply-summary-output",
+            "last_capture_targets": touched,
+        })
+        write_json(paths["manifest"], manifest)
+
+        repo_manifest = read_json(paths["repo_manifest"])
+        repo_manifest.update({
+            "repo_root": str(repo_root),
+            "repo_key": repo_key,
+            "storage_root": str(storage_root),
+            "updated_at": updated_at,
+            "last_seen_branch": branch_name,
+            "last_seen_head": manifest["last_seen_head"],
+        })
+        write_json(paths["repo_manifest"], repo_manifest)
+
         _emit_capture_log(
             paths,
             action="apply-summary-output",

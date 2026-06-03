@@ -189,3 +189,30 @@ def test_enqueue_session_summary_job_carries_previous_processed_cursor(tmp_path,
     assert queued["job_id"] == first["job_id"]
     assert queued["previous_job"]["state"] == "done"
     assert queued["previous_job"]["processed"]["transcript_size"] == 123
+
+
+def test_enqueue_session_summary_job_carries_previous_skipped_cursor(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT", "1")
+    payload = _payload(tmp_path)
+    hook_input = {"session_id": "s1"}
+    first = enqueue_session_summary_job(payload, hook_input)
+    first_path = Path(first["job_path"])
+    skipped_dir = Path(payload["repo_dir"]) / "jobs" / "session-summary" / "skipped"
+    skipped_dir.mkdir(parents=True)
+    skipped_path = skipped_dir / first_path.name
+    job = json.loads(first_path.read_text(encoding="utf-8"))
+    job["status"] = "skipped"
+    job["processed"] = {
+        "transcript_size": 123,
+        "transcript_mtime_ms": 456,
+        "processed_at": "2026-06-02T00:00:00+00:00",
+    }
+    first_path.unlink()
+    skipped_path.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
+
+    second = enqueue_session_summary_job(payload, hook_input)
+    queued = json.loads(Path(second["job_path"]).read_text(encoding="utf-8"))
+
+    assert queued["job_id"] == first["job_id"]
+    assert queued["previous_job"]["state"] == "skipped"
+    assert queued["previous_job"]["processed"]["transcript_size"] == 123

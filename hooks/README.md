@@ -64,7 +64,7 @@ dev-memory-cli install-hooks claude
   `<repo-memory>/jobs/session-summary/pending/`。`install-hooks` 会扫描本地工具并写入
   `~/.dev-memory/config.json` 的 `session_summary.command`（优先 coco，其次 codex，再 claude）。hook 会启动后台 worker，先生成
   `<repo-memory>/jobs/session-summary/inputs/*.json`，再把已提取的 core messages 和 existing memory
-  内联进 `{prompt}`。agent 只输出 summary-output JSON，不调用 CLI；worker 负责 JSON 校验、同 session 最多 3 次重试、落盘和 pending/done/failed 迁移。hook 不等待总结完成。`DEV_MEMORY_SESSION_SUMMARY_CMD` 仅作临时 override，禁用用
+  内联进 `{prompt}`。agent 只输出 summary-output JSON，不调用 CLI；worker 负责 JSON 校验、同 session 最多 3 次重试、落盘和 pending/done/skipped/failed 迁移；无 touched targets 的空总结进入 `skipped/`，不算真实落盘。hook 不等待总结完成。`DEV_MEMORY_SESSION_SUMMARY_CMD` 仅作临时 override，禁用用
   `DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT=1`
 
 ## 和 ECC 的差异

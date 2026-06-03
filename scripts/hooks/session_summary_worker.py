@@ -22,7 +22,6 @@ from _common import (  # noqa: E402
     build_summary_input,
     build_summary_prompt,
     now_iso,
-    run_python,
 )
 
 
@@ -180,6 +179,39 @@ def _retry_prompt(base_prompt, error, previous_output, attempt):
     )
 
 
+def _run_apply_summary_output(summary_input, valid_payload):
+    result = subprocess.run(
+        [
+            "python3",
+            str(CAPTURE_SCRIPT),
+            "apply-summary-output",
+            "--repo",
+            summary_input["job"]["repo_root"],
+            "--json",
+            json.dumps(valid_payload, ensure_ascii=False),
+        ],
+        cwd=summary_input["job"]["repo_root"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    raw = (result.stdout or "").strip()
+    parsed = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+    if result.returncode == 0:
+        return parsed or {}, None
+    if result.returncode == 2 and isinstance(parsed, dict):
+        # apply-summary-output uses exit 2 for dedup warnings after writing
+        # all non-blocked changes. That is not a worker failure.
+        return parsed, None
+    error = (result.stderr or raw or f"apply-summary-output exited {result.returncode}").strip()
+    return None, error
+
+
 def _move_job(job_path, dest_dir, patch):
     job = json.loads(Path(job_path).read_text(encoding="utf-8"))
     job.update(patch)
@@ -209,6 +241,7 @@ def run_worker(args):
 
     attempts = []
     valid_payload = None
+    apply_payload = None
     max_attempts = max(1, args.max_attempts)
     for attempt in range(1, max_attempts + 1):
         prompt = base_prompt if attempt == 1 else _retry_prompt(base_prompt, attempts[-1]["error"], attempts[-1].get("raw_output"), attempt - 1)
@@ -235,6 +268,15 @@ def run_worker(args):
             valid_payload = validate_summary_output(parsed)
             record["valid"] = True
             record["parsed"] = valid_payload
+            apply_payload, apply_error = _run_apply_summary_output(summary_input, valid_payload)
+            if apply_error:
+                record["apply_error"] = apply_error
+                record["error"] = f"apply-summary-output failed: {apply_error}"
+                attempts.append(record)
+                print(f"[dev-memory] summary apply attempt {attempt} failed: {apply_error}", file=sys.stderr)
+                valid_payload = None
+                continue
+            record["apply_result"] = apply_payload
             attempts.append(record)
             break
         except Exception as exc:
@@ -260,40 +302,41 @@ def run_worker(args):
         print(f"[dev-memory] summary job failed -> {dest}")
         return 1
 
-    try:
-        apply_result = run_python(
-            CAPTURE_SCRIPT,
-            "apply-summary-output",
-            "--repo",
-            summary_input["job"]["repo_root"],
-            "--json",
-            json.dumps(valid_payload, ensure_ascii=False),
-            cwd=summary_input["job"]["repo_root"],
-        )
-        apply_payload = json.loads(apply_result or "{}")
-    except Exception as exc:
-        dest = _move_job(
-            job_path,
-            queue_dir / "failed",
-            {
-                "status": "failed",
-                "failed_at": now_iso(),
-                "summary_session_id": summary_session_id,
-                "summary_session_uuid": summary_session_uuid,
-                "summary_input_path": str(summary_input_path),
-                "summary_attempts": attempts,
-                "summary_output": valid_payload,
-                "error": f"apply-summary-output failed: {exc}",
-            },
-        )
-        print(f"[dev-memory] summary apply failed -> {dest}")
-        return 1
     job = json.loads(job_path.read_text(encoding="utf-8"))
     ts = job.get("transcript_state") or {}
     actions = [
         f"{item.get('op')}:{item.get('kind') or item.get('id') or item.get('source')}"
         for item in apply_payload.get("actions", [])
     ]
+    touched_targets = apply_payload.get("touched_targets") or []
+    if not touched_targets:
+        processed_at = now_iso()
+        dest = _move_job(
+            job_path,
+            queue_dir / "skipped",
+            {
+                "status": "skipped",
+                "skipped_at": processed_at,
+                "processed": {
+                    "processed_at": processed_at,
+                    "transcript_size": ts.get("size"),
+                    "transcript_mtime_ms": ts.get("mtime_ms"),
+                    "actions": actions,
+                    "apply_result": apply_payload,
+                },
+                "summary_session_id": summary_session_id,
+                "summary_session_uuid": summary_session_uuid,
+                "summary_input_path": str(summary_input_path),
+                "summary_attempts": attempts,
+                "summary_output": valid_payload,
+                "skip_reason": apply_payload.get("skip_reason")
+                or valid_payload.get("skip_reason")
+                or "summary output touched no targets",
+            },
+        )
+        print(f"[dev-memory] summary job skipped -> {dest}")
+        return 0
+
     dest = _move_job(
         job_path,
         queue_dir / "done",

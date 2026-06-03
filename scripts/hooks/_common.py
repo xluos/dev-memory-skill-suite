@@ -679,7 +679,7 @@ def _append_queue_event(queue_dir, event):
 
 
 def _load_prior_summary_job(queue_dir, job_id):
-    for state in ("pending", "done", "failed"):
+    for state in ("pending", "done", "skipped", "failed"):
         path = queue_dir / state / f"{job_id}.json"
         if not path.exists():
             continue
@@ -770,7 +770,7 @@ transcript 过滤（extract-core 已执行；这里是核对规则）：
 - 已完成且不再影响后续工作的状态，不要追加成“已完成 XXX”；应覆盖 progress/next，或通过 rewrite-entry/tidy 删除旧条目。
 - 旧结论失效时优先 rewrite-entry 或 tidy 删除，不要追加一条相反结论让两条并存。
 - progress / next 是当前态，用 upsert 语义；decision / risk / glossary 是累计条目，但也要避免重复。
-- 只在确有新增或更新时写入。没有有效新增时只把 job 标记 done，actions 为空数组。
+- 只在确有新增或更新时写入。没有有效新增时只输出 `skip_reason`，代码会把 job 标记为 skipped。
 
 输出要求：
 - 只输出一个 summary-output JSON 对象，不要输出 markdown fence、解释文字或命令。
