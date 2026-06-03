@@ -694,6 +694,64 @@ def _load_prior_summary_job(queue_dir, job_id):
     return {}
 
 
+def hook_session_id(hook_input):
+    return _first_string(
+        hook_input.get("session_id") if isinstance(hook_input, dict) else None,
+        hook_input.get("sessionId") if isinstance(hook_input, dict) else None,
+        _hook_payload_value(hook_input, "payload", "session_id"),
+        _hook_payload_value(hook_input, "payload", "sessionId"),
+    )
+
+
+def _hook_transcript_path(hook_input):
+    return _first_string(
+        hook_input.get("transcript_path") if isinstance(hook_input, dict) else None,
+        hook_input.get("transcriptPath") if isinstance(hook_input, dict) else None,
+        _hook_payload_value(hook_input, "payload", "transcript_path"),
+        _hook_payload_value(hook_input, "payload", "transcriptPath"),
+    )
+
+
+def _session_start_source(hook_input):
+    return hook_session_id(hook_input) or _hook_transcript_path(hook_input)
+
+
+def _session_start_marker_path(assets, source):
+    branch_key = assets.get("branch_key") or assets.get("branch_name") or "no-branch"
+    repo_key = assets.get("repo_key") or Path(assets["repo_dir"]).name
+    digest = hashlib.sha1(
+        f"{repo_key}|{branch_key}|{source}".encode("utf-8")
+    ).hexdigest()[:16]
+    return Path(assets["repo_dir"]) / "jobs" / "session-start" / "injected" / f"{digest}.json"
+
+
+def session_start_already_injected(assets, hook_input):
+    source = _session_start_source(hook_input)
+    if not source:
+        return False
+    return _session_start_marker_path(assets, source).exists()
+
+
+def record_session_start_injected(assets, hook_input):
+    source = _session_start_source(hook_input)
+    if not source:
+        return None
+    marker_path = _session_start_marker_path(assets, source)
+    payload = {
+        "schema_version": 1,
+        "event": "SessionStart",
+        "repo_root": str(assets.get("repo_root")),
+        "repo_key": assets.get("repo_key"),
+        "branch": assets.get("branch_name"),
+        "branch_key": assets.get("branch_key"),
+        "session_id": hook_session_id(hook_input),
+        "transcript_path": _hook_transcript_path(hook_input),
+        "injected_at": now_iso(),
+    }
+    _atomic_write_json(marker_path, payload)
+    return marker_path
+
+
 def _transcript_state(transcript_path):
     if not transcript_path:
         return None

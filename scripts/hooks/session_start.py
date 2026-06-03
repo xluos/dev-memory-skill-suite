@@ -7,6 +7,10 @@ from _common import (
     build_session_start_context,
     build_workspace_start_context,
     is_workspace_mode,
+    read_hook_input,
+    record_session_start_injected,
+    resolve_assets,
+    session_start_already_injected,
     log,
 )
 
@@ -22,7 +26,20 @@ def _resolve_context():
 
 def main():
     try:
-        additional_context = _resolve_context()
+        hook_input = read_hook_input()
+        assets = None
+        if not is_workspace_mode():
+            assets = resolve_assets()
+            if session_start_already_injected(assets, hook_input):
+                additional_context = (
+                    "dev-memory SessionStart 已在当前 session 注入过，"
+                    "本次 resume 跳过重复上下文注入。"
+                )
+            else:
+                additional_context = _resolve_context()
+                record_session_start_injected(assets, hook_input)
+        else:
+            additional_context = _resolve_context()
         payload = {
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
