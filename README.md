@@ -116,6 +116,16 @@ dev-memory-cli branch inherit-worktree-base [--source NAME] [--backup | --force]
 - 环境变量 `DEV_MEMORY_DISABLE_WORKTREE_INHERIT=1` 全局关闭
 - 已经开过会话的 worktree 想后补 → 显式跑 `dev-memory-cli branch inherit-worktree-base`（支持 `--source` 覆盖 reflog 探测）
 
+如果希望 worktree 分支写入时把新增知识也写回源分支，可以显式开启 write-back：
+
+```bash
+git config --local dev-memory.worktreeWriteback true
+# 或仅当前进程启用
+DEV_MEMORY_WORKTREE_WRITEBACK=1 dev-memory-cli capture record ...
+```
+
+write-back 只镜像 append 型分支知识：`decision` / `risk` / `glossary` / `source`。`progress` / `next` / `overview` / `scope` / `stage` / `constraint` 这类快照字段不会回源，因为它们表达当前 worktree 分支状态，双写会覆盖源分支自己的工作态。源分支重复内容会走同一套 dedup 检查；被拦截时当前分支写入仍然保留，只在输出的 `worktree_writeback.skipped` 里报告。
+
 ### Graduate 为什么必须显式
 
 `dev-memory-graduate` 会做 destructive move（把 `branches/<key>/` 搬到 `branches/_archived/<key>__<date>/`），同时把 branch 记忆里跨分支可复用的知识（剥离业务命名后）上提到 repo 共享层。**只接受用户显式触发**，不做 implicit 调用。在 no-git 模式下直接拒绝（没有分支概念）。Tidy 同样要求显式触发（用户主动说"整理"），不做 implicit。

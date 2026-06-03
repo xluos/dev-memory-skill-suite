@@ -17,6 +17,7 @@ Subcommands:
 import argparse
 import difflib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -41,6 +42,8 @@ from dev_memory_common import (
     now_iso,
     read_json,
     render_bullets,
+    run_git,
+    sanitize_branch_name,
     split_sections,
     sync_progress,
     upsert_markdown_section,
@@ -691,6 +694,147 @@ KIND_MAP = {
     "pending": {"file": "pending_promotion", "section": "候选条目", "default_mode": "append"},
 }
 
+
+# Worktree write-back deliberately mirrors only append-style knowledge. Snapshot
+# fields like progress/overview/next represent the current branch state and would
+# corrupt the source branch if copied back blindly.
+WORKTREE_WRITEBACK_KINDS = {"decision", "risk", "glossary", "source"}
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _worktree_writeback_enabled(repo_root):
+    env_value = os.environ.get("DEV_MEMORY_WORKTREE_WRITEBACK")
+    if env_value is not None:
+        return _truthy(env_value)
+    cfg = run_git(
+        ["config", "--bool", "--get", "dev-memory.worktreeWriteback"],
+        cwd=repo_root,
+        check=False,
+    )
+    return cfg.returncode == 0 and _truthy(cfg.stdout)
+
+
+def _worktree_inherit_source(manifest, branch_name):
+    provenance = manifest.get("provenance") or []
+    if not isinstance(provenance, list):
+        return None
+    for item in reversed(provenance):
+        if not isinstance(item, dict):
+            continue
+        if item.get("op") != "worktree-inherit":
+            continue
+        source = str(item.get("from") or "").strip()
+        if source and source != branch_name:
+            return source
+    return None
+
+
+def _branch_head(repo_root, branch_name):
+    result = run_git(["rev-parse", branch_name], cwd=repo_root, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _worktree_writeback_context(repo_root, repo_dir, paths, branch_name):
+    if branch_name is None or not _worktree_writeback_enabled(repo_root):
+        return None
+    manifest = read_json(paths["manifest"]) or {}
+    source_name = _worktree_inherit_source(manifest, branch_name)
+    if not source_name:
+        return None
+    source_key = sanitize_branch_name(source_name)
+    source_dir = repo_dir / "branches" / source_key
+    if not source_dir.exists() or not source_dir.is_dir():
+        return {
+            "source": source_name,
+            "source_key": source_key,
+            "source_dir": str(source_dir),
+            "paths": None,
+            "attempted": False,
+            "touched": [],
+            "skipped": [{"reason": "source-missing", "source_dir": str(source_dir)}],
+        }
+    return {
+        "source": source_name,
+        "source_key": source_key,
+        "source_dir": str(source_dir),
+        "paths": asset_paths(repo_dir, source_dir),
+        "attempted": False,
+        "touched": [],
+        "skipped": [],
+    }
+
+
+def _maybe_worktree_writeback(ctx, kind, body, *, title_override=None, mode_override=None,
+                             force=False, dedup_threshold=None, summary=None):
+    if not ctx:
+        return None
+    if kind not in WORKTREE_WRITEBACK_KINDS:
+        return None
+    mode = mode_override or KIND_MAP.get(kind, {}).get("default_mode", "upsert")
+    if mode != "append":
+        return None
+    ctx["attempted"] = True
+    if not ctx.get("paths"):
+        return None
+    hint = _check_dedup_for_kind(
+        ctx["paths"],
+        kind,
+        body,
+        force=force,
+        title_override=title_override,
+        threshold=dedup_threshold,
+    )
+    if hint is not None:
+        ctx["skipped"].append({
+            "kind": kind,
+            "reason": "dedup-blocked",
+            "content_preview": _first_nonempty_line(body)[:_SIM_PREVIEW_LEN],
+            "dedup_hint": hint,
+        })
+        return None
+    rec = _write_one(ctx["paths"], kind, body, title_override=title_override, mode_override=mode)
+    rec["mode"] = "worktree-writeback-append"
+    rec["source_branch"] = ctx["source"]
+    ctx["touched"].append(rec)
+    _emit_capture_log(
+        ctx["paths"],
+        action="worktree-writeback",
+        kind_label=kind,
+        summary=summary or body,
+        touched=[rec],
+    )
+    return rec
+
+
+def _finalize_worktree_writeback(ctx, repo_root, repo_key, storage_root):
+    if not ctx or not ctx.get("paths") or not ctx["touched"]:
+        return None
+    updated_at = now_iso()
+    manifest = read_json(ctx["paths"]["manifest"]) or {}
+    manifest.update({
+        "repo_key": repo_key,
+        "branch": ctx["source"],
+        "branch_key": ctx["source_key"],
+        "storage_root": str(storage_root),
+        "updated_at": updated_at,
+        "last_seen_head": _branch_head(repo_root, ctx["source"]),
+        "last_capture_kind": "worktree-writeback",
+        "last_capture_mode": "worktree-writeback",
+        "last_capture_update_mode": "worktree-writeback",
+        "last_capture_targets": ctx["touched"],
+    })
+    write_json(ctx["paths"]["manifest"], manifest)
+    return {
+        "source": ctx["source"],
+        "source_dir": ctx["source_dir"],
+        "touched": ctx["touched"],
+        "skipped": ctx["skipped"],
+        "updated_at": updated_at,
+    }
+
 # Session-payload → kind mapping, used by `record --summary-json`. Each entry
 # is (payload_key, kind, optional_transform). Several keys may route to the
 # same kind; that's fine — the write layer upserts.
@@ -960,6 +1104,7 @@ def command_record(args):
     repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
         args.repo, args.context_dir, args.branch
     )
+    worktree_writeback = _worktree_writeback_context(repo_root, repo_dir, paths, branch_name)
     already_setup = get_setup_completed(paths["manifest"])
     force = bool(getattr(args, "force", False))
 
@@ -1010,7 +1155,17 @@ def command_record(args):
                     "dedup_hint": hint,
                 })
                 return None
-            return _write_one(paths, kind, body, title_override=title_override)
+            rec = _write_one(paths, kind, body, title_override=title_override)
+            _maybe_worktree_writeback(
+                worktree_writeback,
+                kind,
+                body,
+                title_override=title_override,
+                force=force,
+                dedup_threshold=dedup_threshold,
+                summary=source_label,
+            )
+            return rec
 
         # Worker-facing current-state fields. Keep these as plain text because
         # progress/next sections are snapshots, not bullet-list accumulators.
@@ -1114,7 +1269,17 @@ def command_record(args):
             }, ensure_ascii=False, indent=2))
             return 2
 
-        touched.append(_write_one(paths, kind, content, title_override=args.title))
+        rec = _write_one(paths, kind, content, title_override=args.title)
+        touched.append(rec)
+        _maybe_worktree_writeback(
+            worktree_writeback,
+            kind,
+            content,
+            title_override=args.title,
+            force=force,
+            dedup_threshold=dedup_threshold,
+            summary=content,
+        )
         rec = _maybe_stage_pending(paths, content, branch_name or "")
         if rec:
             touched.append(rec)
@@ -1187,6 +1352,16 @@ def command_record(args):
         "touched_targets": touched,
         "updated_at": manifest["updated_at"],
     }
+    writeback_output = _finalize_worktree_writeback(worktree_writeback, repo_root, repo_key, storage_root)
+    if writeback_output:
+        output["worktree_writeback"] = writeback_output
+    elif worktree_writeback and worktree_writeback.get("attempted") and worktree_writeback.get("skipped"):
+        output["worktree_writeback"] = {
+            "source": worktree_writeback.get("source"),
+            "source_dir": worktree_writeback.get("source_dir"),
+            "touched": [],
+            "skipped": worktree_writeback["skipped"],
+        }
     if dedup_blocked:
         # Batch mode: surface blocked items but still report what was written.
         output["dedup_blocked"] = dedup_blocked
@@ -1320,6 +1495,7 @@ def command_apply_summary_output(args):
     repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
         args.repo, args.context_dir, args.branch
     )
+    worktree_writeback = _worktree_writeback_context(repo_root, repo_dir, paths, branch_name)
     payload = _load_json_payload(args.json, args.json_file)
     if not isinstance(payload, dict):
         raise RuntimeError("summary output must be a JSON object")
@@ -1357,6 +1533,14 @@ def command_apply_summary_output(args):
                 return
         rec = _write_one(paths, kind, body, mode_override=mode_override)
         touched.append(rec)
+        _maybe_worktree_writeback(
+            worktree_writeback,
+            kind,
+            body,
+            mode_override=mode_override,
+            force=force,
+            summary=source,
+        )
         actions.append({
             "op": mode,
             "kind": kind,
@@ -1457,6 +1641,16 @@ def command_apply_summary_output(args):
         "skip_reason": payload.get("skip_reason") if not touched else None,
         "updated_at": updated_at,
     }
+    writeback_output = _finalize_worktree_writeback(worktree_writeback, repo_root, repo_key, storage_root)
+    if writeback_output:
+        output["worktree_writeback"] = writeback_output
+    elif worktree_writeback and worktree_writeback.get("attempted") and worktree_writeback.get("skipped"):
+        output["worktree_writeback"] = {
+            "source": worktree_writeback.get("source"),
+            "source_dir": worktree_writeback.get("source_dir"),
+            "touched": [],
+            "skipped": worktree_writeback["skipped"],
+        }
     if dedup_blocked:
         output["dedup_blocked"] = dedup_blocked
         print(json.dumps(output, ensure_ascii=False, indent=2))
