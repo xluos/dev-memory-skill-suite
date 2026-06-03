@@ -76,6 +76,8 @@ append 类 kind 写入前会对目标 section 做相似度查重，阻止 append
 - 新 action `delete-block`：把 top bullet + 缩进子树 + 紧跟的 `**Why:**` / `**How to apply:**` bold paragraph 聚成一个语义单元整体删，自动吸附 orphan paragraph
 - action 优先级 `reset-file > delete-section > delete-block > delete-entries / edit-entries`，apply 时高优先级覆盖低优先级
 - `delete-block` 的 block_id 在 apply 时**重新解析**当前文件结构定位（不依赖 prepare 时的快照），文件中途被改不误删邻块
+- `prepare` 默认跑两个轻量启发式 pass 给 entry 贴 hint，让 review 从"全表扫一遍"变成"先看高亮"：**STALE**（文件在 `log.md` 最近一次出现 ≥ `--stale-after-days`（默认 30）天前 → 该文件下所有 entry 标 STALE）、**ORPHAN**（glossary entry 的 key phrase——冒号前 ≥ 4 字符——在其他 `.md` 零引用 → 标 ORPHAN，同 entry 上 ORPHAN 优先 STALE）。用户传 `--hints-json` / `--hints-file` 时用户优先；`--no-auto-hints` 关闭；冷启动 `log.md` 为空时不标，避免一次性给所有文件贴 STALE（HUB GAP 不实现，中文 NLP false positive 太干扰）
+- `apply` 落盘后写一行 `log.md`（accepted / rewritten / backup 等详情）
 
 ### 分支记忆生命周期（0.14 起新增 CLI）
 
@@ -118,6 +120,8 @@ dev-memory-cli branch inherit-worktree-base [--source NAME] [--backup | --force]
 
 `dev-memory-graduate` 会做 destructive move（把 `branches/<key>/` 搬到 `branches/_archived/<key>__<date>/`），同时把 branch 记忆里跨分支可复用的知识（剥离业务命名后）上提到 repo 共享层。**只接受用户显式触发**，不做 implicit 调用。在 no-git 模式下直接拒绝（没有分支概念）。Tidy 同样要求显式触发（用户主动说"整理"），不做 implicit。
 
+apply 写入受 **repo 级队列锁**保护：多个会话可连续发起归档，但 harvest / schema / branch 等 pre-flight 校验先于锁执行（失败立即返回），只有写 repo 共享层和移动归档目录的阶段按 repo memory 目录串行等待；等待者拿到锁后会重新确认 `branch_dir` 仍存在，避免并发写共享记忆或重复 move。
+
 ## 运行模式
 
 套件会根据当前工作目录自动切换运行模式，存储布局 key 始终是 `(仓库身份, 分支)`：
@@ -142,14 +146,16 @@ dev-memory-cli branch inherit-worktree-base [--source NAME] [--backup | --force]
     overview.md                   # 长期目标 + 约束
     decisions.md                  # 跨分支通用决策
     glossary.md                   # 共享入口 + 长期背景
+    log.md                        # 仓库事件日志（graduate / shared-* capture 镜像）
     manifest.json
   branches/
-    <branch>/                     # 当前分支层（v2 八件套）
+    <branch>/                     # 当前分支层
       overview.md                 # 冷启动摘要（snapshot 型）
       progress.md                 # 当前进展 + 下一步 + 自动同步区（snapshot 型）
       decisions.md                # 稳定决策 + Why + 影响（accumulation 型）
       risks.md                    # 阻塞 + 注意点（accumulation 型）
       glossary.md                 # 术语 + 源资料入口（accumulation 型）
+      log.md                      # append-only 事件时间线（capture / graduate 落盘后追加）
       unsorted.md                 # heuristic 兜底（setup 时分类）
       pending-promotion.md        # 跨分支候选 staging（graduate 预筛源）
       manifest.json               # 含 setup_completed
@@ -166,6 +172,7 @@ dev-memory-cli branch inherit-worktree-base [--source NAME] [--backup | --force]
 
 **其他关键点：**
 
+- `log.md`：append-only 事件时间线，capture record / rewrite-entry、graduate apply、tidy apply 落盘后各追加一行 `## [ISO] action · kind | summary`，`grep '^## \[' log.md | tail -20` 看最近事件。SessionStart 只列文件路径不抽正文（lazy loading）；`sync-working-tree` / `record-head` 故意不写以免机器噪音冲洗日志；`shared-*` kind 写入会镜像到 repo log，分支-only 写入不污染 repo log
 - `repo-key`：优先按仓库 remote 身份派生，不只看目录名；支持多 clone / worktree 共享同一套记忆
 - `DEV_ASSETS_ROOT`：覆盖默认 `~/.dev-memory/repos`；CLI、所有 hook 脚本、所有 skill 脚本都尊重此环境变量
 - v1 → v2 迁移在第一次 capture/context 时自动触发，老的 `development.md` / `context.md` / `sources.md` 按 section 切分进 v2 对应文件后删除（单用户离线清理，不保留 .legacy）
