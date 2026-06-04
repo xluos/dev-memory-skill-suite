@@ -54,7 +54,7 @@ LEGACY_V1_FILES = ("development.md", "context.md", "sources.md")
 # Bottom-up clustering of changed-file paths into a small set of "focus
 # directories". The cluster never grows larger than this many entries; a
 # higher number gives finer granularity at the cost of a longer hint list.
-FOCUS_AREA_LIMIT = 5
+FOCUS_AREA_LIMIT = 10
 
 
 def now_iso():
@@ -1339,10 +1339,11 @@ def summarize_scopes(paths):
 
 def _initial_parent(path_str):
     """File path → its immediate parent directory key. Files at repo root use
-    '.', everything else uses the POSIX-style parent dir string."""
+    their own file path as the focus key instead of '.', everything else uses
+    the POSIX-style parent dir string."""
     parent = Path(path_str).parent
     if str(parent) in ("", "."):
-        return "."
+        return Path(path_str).as_posix()
     return parent.as_posix()
 
 
@@ -1368,8 +1369,8 @@ def summarize_focus_areas(paths, limit=None):
     count (the "dominant cluster" — most files concentrated under a single
     deeper subtree), and merge only those originals into it. Buckets that
     were already at depth 1 or '.' are left untouched, so isolated shallow
-    directories survive. Tie-break: deeper rolled-up key wins, then
-    lexicographic.
+    directories and root-level files survive. Tie-break: deeper rolled-up key
+    wins, then lexicographic.
     """
     if limit is None:
         limit = FOCUS_AREA_LIMIT
@@ -1405,19 +1406,22 @@ def summarize_focus_areas(paths, limit=None):
 RECENT_COMMITS_FOR_FOCUS = 10
 
 
-def _files_in_recent_commits(repo_root, count):
-    """Files touched by the last `count` non-merge commits on HEAD."""
-    out = git_lines(
-        [
-            "log",
-            f"-n{count}",
-            "--no-merges",
-            "--name-only",
-            "--pretty=format:",
-        ],
-        cwd=repo_root,
-        check=False,
-    )
+def _files_in_recent_commits(repo_root, count, base_ref=None):
+    """Files touched by recent non-merge commits on the current branch.
+
+    When a default base is known, bound the range to ``base..HEAD`` so noisy
+    commits already merged into the base branch do not pollute focus areas.
+    """
+    cmd = [
+        "log",
+        f"-n{count}",
+        "--no-merges",
+        "--name-only",
+        "--pretty=format:",
+    ]
+    if base_ref:
+        cmd.append(f"{base_ref}..HEAD")
+    out = git_lines(cmd, cwd=repo_root, check=False)
     seen = []
     seen_set = set()
     for line in out:
@@ -1432,9 +1436,8 @@ def collect_git_facts(repo_root, branch_name, _storage_root=None):
     working_tree_files = git_lines(["diff", "--name-only"], cwd=repo_root)
     staged_files = git_lines(["diff", "--cached", "--name-only"], cwd=repo_root)
     untracked_files = git_lines(["ls-files", "--others", "--exclude-standard"], cwd=repo_root)
-    recent_commit_files = _files_in_recent_commits(repo_root, RECENT_COMMITS_FOR_FOCUS)
-
     default_base = detect_default_base(repo_root)
+    recent_commit_files = _files_in_recent_commits(repo_root, RECENT_COMMITS_FOR_FOCUS, default_base)
 
     all_paths = sorted(set(working_tree_files + staged_files + untracked_files + recent_commit_files))
     return {
@@ -1456,25 +1459,24 @@ def merged_focus_areas(new_paths, existing, limit=None):
     tree signal.
 
     Algorithm (matches user's mental model — "specific signals over wide
-    parents, stale entries kept ranked low until limit prunes them"):
+    parents; stale entries disappear once current git facts no longer cover
+    them"):
 
       1. Internally dedupe `existing`: when a wider parent dir (e.g. `apps`)
-         coexists with its specific descendant (e.g. `apps/x/y/prompts`),
-         drop the wider parent. The wider parent is almost always a leftover
-         from an earlier roll-up that swallowed too much; the specific
-         descendants carry the real signal.
+         coexists with either an existing or freshly-derived specific
+         descendant (e.g. `apps/x/y/prompts`), drop the wider parent. The wider
+         parent is almost always a leftover from an earlier roll-up that
+         swallowed too much; the specific descendants carry the real signal.
       2. Score every surviving existing dir by how many `new_paths` it
-         actually covers (0 means stale, e.g. `.vscode` after a one-shot
-         IDE write — but we keep it in the ranking, only the final limit
-         truncation prunes it from the bottom).
-      3. Compute `uncovered` = paths not under any surviving existing dir.
+         actually covers. 0 means stale, e.g. `.vscode` after a one-shot IDE
+         write; stale entries are not carried forward.
+      3. Compute `uncovered` = paths not under any active existing dir.
       4. Roll up the uncovered paths' immediate parents into ≤ remaining
          budget buckets, **forbidding roll-up into any ancestor of an
          existing dir** so the output cannot regenerate the over-wide
          parent we just removed in step 1.
-      5. Merge existing weights with the rolled-up uncovered buckets,
-         sort by weight desc, truncate to `limit`. Stale 0-weight entries
-         naturally sit at the bottom and get culled when buckets > limit.
+      5. Merge active existing weights with the rolled-up uncovered buckets,
+         sort by weight desc, truncate to `limit`.
     """
     if limit is None:
         limit = FOCUS_AREA_LIMIT
@@ -1486,24 +1488,31 @@ def merged_focus_areas(new_paths, existing, limit=None):
             return "/" not in path
         return path == dir_ or path.startswith(dir_ + "/")
 
+    fresh_focus = summarize_focus_areas(new_paths, limit=limit)
+
     def _drop_wider_parents(items):
-        items = list(dict.fromkeys(items))  # dedupe preserving order
-        return [d for d in items if not any(other != d and _is_under(other, d) for other in items)]
+        items = [d for d in dict.fromkeys(items) if d != "."]  # dedupe preserving order
+        comparison_items = items + fresh_focus
+        return [d for d in items if not any(other != d and _is_under(other, d) for other in comparison_items)]
 
     # (1) Drop wider parent entries inside existing.
     deduped_existing = _drop_wider_parents(existing)
 
-    # (2) Real coverage weight per surviving existing dir.
+    # (2) Real coverage weight per surviving existing dir. Drop stale existing
+    # dirs before computing uncovered paths or slot budget; otherwise stale
+    # manifest entries still force new hot spots to roll up too far.
     existing_weights = {d: sum(1 for p in new_paths if _is_under(p, d)) for d in deduped_existing}
+    active_existing_weights = {d: w for d, w in existing_weights.items() if w > 0}
 
-    # (3) Paths not yet covered by any existing dir.
-    uncovered = [p for p in new_paths if not any(_is_under(p, d) for d in deduped_existing)]
+    # (3) Paths not yet covered by any active existing dir.
+    active_existing_dirs = set(active_existing_weights)
+    uncovered = [p for p in new_paths if not any(_is_under(p, d) for d in active_existing_dirs)]
 
     # (4) Forbidden roll-up targets = any ancestor of a surviving existing
     # dir. Without this guard the roll-up of `uncovered` could produce a
     # parent like `apps` and we'd be back where we started.
     forbidden_ancestors = set()
-    for d in deduped_existing:
+    for d in active_existing_dirs:
         if d in ("", "."):
             continue
         parent = Path(d).parent
@@ -1517,7 +1526,7 @@ def merged_focus_areas(new_paths, existing, limit=None):
             parent = parent.parent
 
     # Reserve slots for existing entries; uncovered fills the rest.
-    remaining_budget = max(1, limit - len(existing_weights))
+    remaining_budget = max(1, limit - len(active_existing_weights))
 
     new_buckets = Counter()
     for p in uncovered:
@@ -1558,15 +1567,9 @@ def merged_focus_areas(new_paths, existing, limit=None):
     #   - new_quota      = floor(limit/2) → reserved for fresh buckets
     #   - either side can borrow unused slots from the other (so we never
     #     leave a slot empty just to enforce the partition).
-    #   - stale existing (weight=0) is a fallback that only fills slots left
-    #     after both quotas are settled — they ride at the bottom and get
-    #     pruned naturally.
     existing_active = sorted(
-        ((d, w) for d, w in existing_weights.items() if w > 0),
+        active_existing_weights.items(),
         key=lambda kv: (-kv[1], kv[0]),
-    )
-    existing_stale = sorted(
-        (d for d, w in existing_weights.items() if w == 0),
     )
     new_items = sorted(new_buckets.items(), key=lambda kv: (-kv[1], kv[0]))
 
@@ -1584,26 +1587,24 @@ def merged_focus_areas(new_paths, existing, limit=None):
     if new_overflow > 0:
         existing_take.extend(existing_active[existing_quota:existing_quota + new_overflow])
 
-    final = []
+    selected = []
     seen = set()
-    for d, _ in existing_take + new_take:
+    for d, weight in existing_take + new_take:
         if d in seen:
             continue
         seen.add(d)
-        final.append(d)
-    for d in existing_stale:
-        if len(final) >= limit:
-            break
-        if d in seen:
-            continue
-        seen.add(d)
-        final.append(d)
-    return final[:limit]
+        selected.append((d, weight))
+    selected.sort(key=lambda kv: (-kv[1], kv[0]))
+    return [d for d, _ in selected[:limit]]
 
 
 def build_auto_block(facts):
     base_line = facts["default_base"] or "未检测到 origin/HEAD"
     head_line = facts["last_seen_head"] or "尚未检测到 HEAD"
+    if facts["default_base"]:
+        history_cmd = f"git log --oneline -n {RECENT_COMMITS_FOR_FOCUS} --no-merges {facts['default_base']}..HEAD"
+    else:
+        history_cmd = f"git log --oneline -n {RECENT_COMMITS_FOR_FOCUS} --no-merges"
     focus_lines = render_bullets(facts["focus_areas"], empty_text="- 当前未检测到改动目录", wrap_code=True)
     scope_lines = render_bullets(
         [f"{item['scope']} ({item['files']} files)" for item in facts["scope_summary"]],
@@ -1620,7 +1621,7 @@ def build_auto_block(facts):
         "#### 顶层改动范围\n\n"
         f"{scope_lines}\n\n"
         "#### 按需查看提交历史\n\n"
-        f"- `git log --oneline -n {RECENT_COMMITS_FOR_FOCUS} --no-merges`\n"
+        f"- `{history_cmd}`\n"
         "- `git diff --name-only`\n"
     )
 
