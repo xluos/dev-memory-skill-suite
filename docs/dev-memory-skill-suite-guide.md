@@ -98,11 +98,20 @@
 
 ## 各 Skill 现在的职责
 
-> 0.16 起取消 `using-dev-memory` 路由总入口；0.17 起再取消 `dev-memory-context` 读取 skill —— SessionStart hook 注入末尾直接列出权威记忆文件的绝对路径，AI 需要详情时 Read 对应文件即可，不再需要 skill 中转。CLI 命令 `dev-memory-cli context show` / `context sync` 仍然保留（hook 内部和脚本场景仍要用），只是不再以 skill 形式暴露。当前套件 4 个 skill。
+> 0.16 起取消 `using-dev-memory` 路由总入口；0.17 起取消旧 `dev-memory-context` 读取 skill。现在提供更窄的 `dev-memory-read`：只负责主动定位和搜索当前 repo 的记忆文件，不承担 SessionStart context 注入，也不写入。CLI 命令 `dev-memory-cli context show` / `context sync` 仍然保留（hook 内部和脚本场景仍要用）。当前套件 5 个 skill。
 
-### 读取（无 skill）
+### `dev-memory-read`
 
-SessionStart hook 自动跑 `dev-memory-cli context sync` 刷新 progress.md auto-block，并把 progress / risks / decisions / glossary / overview / repo 共享层文件的绝对路径直接列在注入末尾。AI 需要展开任何细节时 Read 对应文件即可。
+主动读取入口。用户说“重新读一下记忆”“之前记的 todo 有更新”“按记忆里的最新口径”时，先跑：
+
+```bash
+dev-memory-cli read show --repo <repo-path>
+dev-memory-cli read search --repo <repo-path> --query "关键词"
+```
+
+它按当前 repo identity 和 branch name 精确计算 `repo_dir` / `branch_dir`，默认只搜当前 branch + repo 共享层。需要跨旧分支排查时，再显式用 `--scope all-branches` 或 `--scope archived`。
+
+它不创建新骨架，不修改文件，不扫描整个用户目录。
 
 ### `dev-memory-setup`
 

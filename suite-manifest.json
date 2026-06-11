@@ -1,6 +1,7 @@
 {
   "suite_name": "dev-memory-skill-suite",
   "skills": [
+    "dev-memory-read",
     "dev-memory-setup",
     "dev-memory-capture",
     "dev-memory-graduate",

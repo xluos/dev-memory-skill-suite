@@ -285,6 +285,7 @@ function commandUi(_positional, options) {
 // Their CLIs (subcommands, flags) are owned by argparse on the Python
 // side, so we deliberately bypass parseArgs and forward raw argv.
 const PY_SUBCOMMAND_SCRIPTS = {
+  read: "dev_memory_read.py",
   context: "dev_memory_context.py",
   capture: "dev_memory_capture.py",
   setup: "dev_memory_setup.py",
@@ -616,6 +617,7 @@ function printHelp() {
   dev-memory-cli install-hooks <codex|claude> [--repo PATH] [--global]
   dev-memory-cli install-hooks --all [--repo PATH] [--global]
   dev-memory-cli ui [--port N] [--host HOST] [--no-open] [--read-only]
+  dev-memory-cli read <show|search> [...]
   dev-memory-cli context <show|...> [...]
   dev-memory-cli capture <record|show|sync-working-tree|record-head|suggest-kind|classify> [...]
   dev-memory-cli setup <init|merge-unsorted|mark-completed> [...]
