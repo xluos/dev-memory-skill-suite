@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import atexit
 import json
 import os
 import re
@@ -213,22 +214,70 @@ def _run_apply_summary_output(summary_input, valid_payload):
 
 
 def _move_job(job_path, dest_dir, patch):
-    job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+    src = Path(job_path)
+    try:
+        job = json.loads(src.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        job = {"job_id": src.stem}
     job.update(patch)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / Path(job_path).name
+    dest = dest_dir / src.name
     _atomic_write_json(dest, job)
     try:
-        Path(job_path).unlink()
+        src.unlink()
     except FileNotFoundError:
         pass
     return dest
+
+
+def _acquire_lock(queue_dir, job_id):
+    """Try to acquire a PID-based lock. Returns lock path on success, None if another worker is alive."""
+    locks_dir = Path(queue_dir) / "locks"
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = locks_dir / f"{job_id}.lock"
+    if lock_path.exists():
+        try:
+            existing_pid = int(lock_path.read_text(encoding="utf-8").strip())
+            try:
+                os.kill(existing_pid, 0)
+                return None
+            except (OSError, ProcessLookupError):
+                pass
+        except (ValueError, OSError):
+            pass
+    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+    return lock_path
+
+
+def _release_lock(lock_path):
+    try:
+        if lock_path and lock_path.exists():
+            content = lock_path.read_text(encoding="utf-8").strip()
+            if content == str(os.getpid()):
+                lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def run_worker(args):
     job_path = Path(args.job)
     queue_dir = Path(args.queue_dir)
     job_id = args.job_id or job_path.stem
+
+    if not job_path.exists():
+        for state in ("done", "skipped", "failed"):
+            if (queue_dir / state / f"{job_id}.json").exists():
+                print(f"[dev-memory] worker exit: job {job_id} already {state}", file=sys.stderr)
+                return 0
+        print(f"[dev-memory] worker exit: pending file not found for {job_id}", file=sys.stderr)
+        return 0
+
+    lock_path = _acquire_lock(queue_dir, job_id)
+    if lock_path is None:
+        print(f"[dev-memory] worker exit: another worker already running for {job_id}", file=sys.stderr)
+        return 0
+    atexit.register(_release_lock, lock_path)
+
     summary_session_id = args.summary_session_id or f"dev-memory-summary-{job_id}"
     summary_session_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"dev-memory-summary:{summary_session_id}"))
     summary_input = build_summary_input(job_path)
@@ -302,7 +351,10 @@ def run_worker(args):
         print(f"[dev-memory] summary job failed -> {dest}")
         return 1
 
-    job = json.loads(job_path.read_text(encoding="utf-8"))
+    try:
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        job = {}
     ts = job.get("transcript_state") or {}
     actions = [
         f"{item.get('op')}:{item.get('kind') or item.get('id') or item.get('source')}"

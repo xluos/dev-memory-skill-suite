@@ -860,13 +860,57 @@ SUMMARY_INPUT_JSON:
 """
 
 
+def _is_pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _check_worker_lock(queue_dir, job_id):
+    """Return True if a live worker already holds the lock for this job."""
+    lock_path = Path(queue_dir) / "locks" / f"{job_id}.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        content = lock_path.read_text(encoding="utf-8").strip()
+        pid = int(content)
+        if _is_pid_alive(pid):
+            return True
+        lock_path.unlink(missing_ok=True)
+    except (ValueError, OSError):
+        lock_path.unlink(missing_ok=True)
+    return False
+
+
+def _is_job_already_terminal(queue_dir, job_id):
+    """Return the terminal state if this job is already done/skipped, else None."""
+    for state in ("done", "skipped"):
+        if (Path(queue_dir) / state / f"{job_id}.json").exists():
+            return state
+    return None
+
+
 def maybe_start_summary_agent(job_path, queue_dir=None, job_id=None):
     if os.environ.get("DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT", "").strip():
         return None
     command = session_summary_command()
     if not command:
         return None
-    summary_session_id = f"dev-memory-summary-{job_id or Path(job_path).stem}"
+    effective_queue_dir = queue_dir or Path(job_path).parent.parent
+    effective_job_id = job_id or Path(job_path).stem
+
+    terminal = _is_job_already_terminal(effective_queue_dir, effective_job_id)
+    if terminal:
+        log(f"[dev-memory] summary agent skipped: job {effective_job_id} already {terminal}")
+        return None
+
+    if _check_worker_lock(effective_queue_dir, effective_job_id):
+        log(f"[dev-memory] summary agent skipped: worker already running for {effective_job_id}")
+        return None
+
+    summary_session_id = f"dev-memory-summary-{effective_job_id}"
     log_path = None
     if queue_dir is not None and job_id:
         runs_dir = Path(queue_dir) / "runs"
@@ -879,9 +923,9 @@ def maybe_start_summary_agent(job_path, queue_dir=None, job_id=None):
         "--job",
         str(job_path),
         "--queue-dir",
-        str(queue_dir or Path(job_path).parent.parent),
+        str(effective_queue_dir),
         "--job-id",
-        str(job_id or Path(job_path).stem),
+        str(effective_job_id),
         "--agent-command",
         command,
         "--summary-session-id",
