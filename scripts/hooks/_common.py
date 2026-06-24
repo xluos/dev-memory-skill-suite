@@ -200,6 +200,27 @@ def extract_section(path, title):
     return None if is_placeholder(body) else body
 
 
+def extract_repo_file_body(path):
+    """Extract full body of a repo-level file, skipping the H1 title and
+    ``## 仓库`` metadata section. Placeholder-only sections within the file
+    are dropped individually so that real content in sibling sections is
+    preserved. Returns None when nothing substantive remains."""
+    if not path.exists():
+        return None
+    content = path.read_text(encoding="utf-8")
+    content = re.sub(r"^## 仓库\n\n.*?(?=^## |\Z)", "", content, count=1,
+                     flags=re.MULTILINE | re.DOTALL)
+    content = re.sub(r"^# .+\n*", "", content, count=1)
+    sections = re.split(r"(?=^## )", content, flags=re.MULTILINE)
+    kept = []
+    for sec in sections:
+        sec_body = strip_managed_markers(sec).strip()
+        if sec_body and not is_placeholder(sec_body):
+            kept.append(sec_body)
+    body = "\n\n".join(kept).strip()
+    return body or None
+
+
 def compact_body(text, max_lines=8, max_chars=700):
     """Compact a section body. Returns (compacted_text, was_truncated). The
     caller uses `was_truncated` to decide whether to append a "see full file"
@@ -331,10 +352,9 @@ _FULL_SECTION_KEYS = (
     ("glossary", "当前有效上下文"),
     ("decisions", "关键决策与原因"),
     ("risks", "后续继续前要注意"),
-    ("repo_overview", "长期目标与边界"),
-    ("repo_overview", "仓库级关键约束"),
-    ("repo_decisions", "跨分支通用决策"),
-    ("repo_glossary", "共享入口"),
+    ("repo_overview", None),
+    ("repo_decisions", None),
+    ("repo_glossary", None),
 )
 
 _BRIEF_SECTION_KEYS = (
@@ -351,17 +371,33 @@ _RECENT_FIRST_SECTIONS = {
     ("risks", "后续继续前要注意"),
     ("glossary", "当前有效上下文"),
     ("glossary", "分支源资料入口"),
-    ("repo_decisions", "跨分支通用决策"),
-    ("repo_glossary", "长期有效背景"),
-    ("repo_glossary", "共享入口"),
 }
+
+_REPO_LEVEL_KEYS = {
+    "repo_overview",
+    "repo_decisions",
+    "repo_glossary",
+    "repo_log",
+}
+_REPO_DISPLAY_TITLES = {
+    "repo_overview": "仓库概览",
+    "repo_decisions": "跨分支通用决策",
+    "repo_glossary": "仓库共享术语与入口",
+}
+_REPO_MAX_LINES = 32
+_REPO_MAX_CHARS = 3000
 
 
 def _extract_sections(paths, keys):
     out = []
     for file_key, title in keys:
-        body = extract_section(paths[file_key], title)
-        out.append((title, body, file_key))
+        if title is None:
+            body = extract_repo_file_body(paths[file_key])
+            display_title = _REPO_DISPLAY_TITLES.get(file_key, paths[file_key].stem)
+        else:
+            body = extract_section(paths[file_key], title)
+            display_title = title
+        out.append((display_title, body, file_key))
     return out
 
 
@@ -399,11 +435,18 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
     for title, body, file_key in sections:
         if not body:
             continue
-        if (file_key, title) in _RECENT_FIRST_SECTIONS:
-            compacted, truncated = compact_recent_body(body, max_lines=max_lines, max_chars=max_chars)
+        if full and file_key in _REPO_LEVEL_KEYS:
+            eff_lines, eff_chars = _REPO_MAX_LINES, _REPO_MAX_CHARS
         else:
-            compacted, truncated = compact_body(body, max_lines=max_lines, max_chars=max_chars)
-        block = f"{title}:\n{compacted}"
+            eff_lines, eff_chars = max_lines, max_chars
+        if (file_key, title) in _RECENT_FIRST_SECTIONS:
+            compacted, truncated = compact_recent_body(body, max_lines=eff_lines, max_chars=eff_chars)
+        else:
+            compacted, truncated = compact_body(body, max_lines=eff_lines, max_chars=eff_chars)
+        if full and file_key in _REPO_LEVEL_KEYS:
+            block = compacted
+        else:
+            block = f"{title}:\n{compacted}"
         if truncated:
             file_path = paths.get(file_key)
             if file_path is not None:
