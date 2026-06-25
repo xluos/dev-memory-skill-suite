@@ -33,6 +33,7 @@ ALLOWED_KEYS = {
     "decisions",
     "risks",
     "glossary",
+    "file_map",
     "shared_decisions",
     "shared_context",
     "shared_sources",
@@ -95,6 +96,18 @@ def validate_summary_output(payload):
                 raise ValueError(f"{field}[{idx}] requires summary")
             for sub in ("reason", "impact"):
                 _ensure_str(item.get(sub), f"{field}[{idx}].{sub}")
+    file_map = payload.get("file_map")
+    if file_map is not None:
+        if not isinstance(file_map, list):
+            raise ValueError("file_map must be a list")
+        for idx, item in enumerate(file_map):
+            if not isinstance(item, dict):
+                raise ValueError(f"file_map[{idx}] must be an object")
+            if not isinstance(item.get("label"), str) or not item["label"].strip():
+                raise ValueError(f"file_map[{idx}] requires label")
+            paths_val = item.get("paths") or ([item["path"]] if item.get("path") else [])
+            if not paths_val or not all(isinstance(p, str) for p in paths_val):
+                raise ValueError(f"file_map[{idx}] requires paths (list of strings) or path (string)")
     for field in ("upserts", "appends"):
         value = payload.get(field)
         if value is None:

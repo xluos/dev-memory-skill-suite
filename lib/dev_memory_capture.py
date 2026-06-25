@@ -689,6 +689,8 @@ KIND_MAP = {
     "shared-source": {"file": "repo_glossary", "section": "共享入口", "default_mode": "append"},
     "shared-overview": {"file": "repo_overview", "section": "长期目标与边界", "default_mode": "upsert"},
     "shared-constraint": {"file": "repo_overview", "section": "仓库级关键约束", "default_mode": "upsert"},
+    # semantic file map: agent outputs merged mapping each session
+    "filemap": {"file": "progress", "section": "组件文件映射", "default_mode": "upsert"},
     # fallback bins always accumulate
     "unsorted": {"file": "unsorted", "section": "待分类", "default_mode": "append"},
     "pending": {"file": "pending_promotion", "section": "候选条目", "default_mode": "append"},
@@ -1564,6 +1566,21 @@ def command_apply_summary_output(args):
         add_write("shared-context", item, source="shared_context")
     for item in payload.get("shared_sources") or []:
         add_write("shared-source", item, source="shared_sources")
+
+    file_map = payload.get("file_map")
+    if isinstance(file_map, list) and file_map:
+        lines = []
+        for entry in file_map:
+            if not isinstance(entry, dict):
+                continue
+            label = entry.get("label", "").strip()
+            paths_val = entry.get("paths") or ([entry["path"]] if entry.get("path") else [])
+            if not label or not paths_val:
+                continue
+            joined = ", ".join(f"`{p}`" for p in paths_val)
+            lines.append(f"- {label}: {joined}")
+        if lines:
+            add_write("filemap", "\n".join(lines), source="file_map")
 
     # Explicit patch operations.
     for item in payload.get("upserts") or []:
