@@ -1,6 +1,6 @@
 {
   "name": "dev-memory-cli",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "description": "CLI for dev-memory hooks and repo-local setup (formerly @xluos/dev-assets-cli)",
   "license": "MIT",
   "repository": {
