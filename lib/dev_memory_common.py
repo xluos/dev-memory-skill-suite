@@ -1395,6 +1395,17 @@ def _dedup_parent_child(dirs):
     return result
 
 
+def _drop_low_weight(ranked):
+    """Drop weight-1 entries when higher-weight entries exist, since a single
+    file change doesn't carry meaningful focus signal."""
+    if not ranked:
+        return ranked
+    max_weight = ranked[0][1]
+    if max_weight < 3:
+        return ranked
+    return [(k, w) for k, w in ranked if w >= 2]
+
+
 def summarize_focus_areas(paths, limit=None):
     """Cluster changed-file paths into ≤ `limit` focus directories.
 
@@ -1437,6 +1448,7 @@ def summarize_focus_areas(paths, limit=None):
             buckets.pop(k)
         buckets[winner_key] = buckets.get(winner_key, 0) + winner_count
     ranked = sorted(buckets.items(), key=lambda kv: (-kv[1], kv[0]))
+    ranked = _drop_low_weight(ranked)
     result = [k for k, _ in ranked[:limit]]
     return _dedup_parent_child(result)
 
@@ -1642,6 +1654,7 @@ def merged_focus_areas(new_paths, existing, limit=None):
         seen.add(d)
         selected.append((d, weight))
     selected.sort(key=lambda kv: (-kv[1], kv[0]))
+    selected = _drop_low_weight(selected)
     result = [d for d, _ in selected[:limit]]
     return _dedup_parent_child(result)
 
