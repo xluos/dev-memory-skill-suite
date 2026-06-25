@@ -1337,13 +1337,38 @@ def summarize_scopes(paths):
     return [{"scope": scope, "files": count} for scope, count in sorted(counter.items())]
 
 
+_FOCUS_EXCLUDED_PREFIXES = (
+    ".claude/", ".vscode/", ".idea/", ".git/",
+    "node_modules/", "__pycache__/", ".venv/",
+)
+
+_FOCUS_EXCLUDED_ROOT_FILES = {
+    "go.mod", "go.sum", "go.work", "go.work.sum",
+    "package.json", "package-lock.json", "pnpm-lock.yaml", "bun.lockb",
+    "tsconfig.json", "tsconfig.base.json",
+    "main.go", "main.py",
+    ".gitignore", ".editorconfig", ".prettierrc",
+    "skills-lock.json", "eden.monorepo.json",
+    "Makefile", "Dockerfile",
+}
+
+
+def _should_exclude_path(path_str):
+    if any(path_str.startswith(prefix) or path_str == prefix.rstrip("/")
+           for prefix in _FOCUS_EXCLUDED_PREFIXES):
+        return True
+    if "/" not in path_str and path_str in _FOCUS_EXCLUDED_ROOT_FILES:
+        return True
+    return False
+
+
 def _initial_parent(path_str):
-    """File path → its immediate parent directory key. Files at repo root use
-    their own file path as the focus key instead of '.', everything else uses
-    the POSIX-style parent dir string."""
+    """File path → its immediate parent directory key. Root-level files map to
+    None (skipped by callers) since individual files are not useful focus
+    directories."""
     parent = Path(path_str).parent
     if str(parent) in ("", "."):
-        return Path(path_str).as_posix()
+        return None
     return parent.as_posix()
 
 
@@ -1360,6 +1385,16 @@ def _rolled_up(key):
     return Path(key).parent.as_posix()
 
 
+def _dedup_parent_child(dirs):
+    """Remove wider parents when a more specific child exists."""
+    result = []
+    for d in dirs:
+        if any(other != d and other.startswith(d + "/") for other in dirs):
+            continue
+        result.append(d)
+    return result
+
+
 def summarize_focus_areas(paths, limit=None):
     """Cluster changed-file paths into ≤ `limit` focus directories.
 
@@ -1374,7 +1409,14 @@ def summarize_focus_areas(paths, limit=None):
     """
     if limit is None:
         limit = FOCUS_AREA_LIMIT
-    buckets = Counter(_initial_parent(p) for p in paths)
+    filtered = [p for p in paths if not _should_exclude_path(p)]
+    buckets = Counter()
+    for p in filtered:
+        key = _initial_parent(p)
+        if key is not None:
+            buckets[key] += 1
+    if not buckets:
+        return []
     while len(buckets) > limit:
         proposals = {}  # rolled_key -> [sum_count, [original_keys...]]
         for key, count in buckets.items():
@@ -1395,7 +1437,8 @@ def summarize_focus_areas(paths, limit=None):
             buckets.pop(k)
         buckets[winner_key] = buckets.get(winner_key, 0) + winner_count
     ranked = sorted(buckets.items(), key=lambda kv: (-kv[1], kv[0]))
-    return [k for k, _ in ranked[:limit]]
+    result = [k for k, _ in ranked[:limit]]
+    return _dedup_parent_child(result)
 
 
 # Number of recent commits whose touched files contribute to the "focus area"
@@ -1480,6 +1523,8 @@ def merged_focus_areas(new_paths, existing, limit=None):
     """
     if limit is None:
         limit = FOCUS_AREA_LIMIT
+    existing = [d for d in existing
+                if "/" in d and not _should_exclude_path(d)]
     if not existing:
         return summarize_focus_areas(new_paths, limit=limit)
 
@@ -1530,7 +1575,9 @@ def merged_focus_areas(new_paths, existing, limit=None):
 
     new_buckets = Counter()
     for p in uncovered:
-        new_buckets[_initial_parent(p)] += 1
+        key = _initial_parent(p)
+        if key is not None and not _should_exclude_path(p):
+            new_buckets[key] += 1
 
     while len(new_buckets) > remaining_budget:
         proposals = {}
@@ -1595,7 +1642,8 @@ def merged_focus_areas(new_paths, existing, limit=None):
         seen.add(d)
         selected.append((d, weight))
     selected.sort(key=lambda kv: (-kv[1], kv[0]))
-    return [d for d, _ in selected[:limit]]
+    result = [d for d, _ in selected[:limit]]
+    return _dedup_parent_child(result)
 
 
 def build_auto_block(facts):

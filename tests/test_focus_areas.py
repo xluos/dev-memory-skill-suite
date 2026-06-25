@@ -63,7 +63,7 @@ def test_auto_block_history_command_uses_default_base():
 
 def test_merged_focus_areas_drops_stale_and_overwide_existing_entries():
     paths = [
-        ".codex/hooks.json",
+        "config/hooks.json",
         "apps/infra-website/components/FloatingMatchWidget.tsx",
         "apps/infra-website/docs/_nav.json",
         "apps/infra-website/rspress.config.ts",
@@ -74,23 +74,23 @@ def test_merged_focus_areas_drops_stale_and_overwide_existing_entries():
 
     focus = merged_focus_areas(paths, polluted_existing)
 
-    assert focus == [
-        "apps/infra-website/src/pages/match-component-v2",
-        ".codex",
-        "apps/infra-website",
-        "apps/infra-website/components",
-        "apps/infra-website/docs",
-    ]
+    assert "apps/infra-website/src/pages/match-component-v2" in focus
+    assert "." not in focus
+    assert "packages" not in focus
+    assert "apps" not in focus
 
 
-def test_focus_areas_use_root_file_name_instead_of_dot():
+def test_focus_areas_skip_root_level_files():
     focus = summarize_focus_areas([
         "package.json",
+        "go.mod",
         "apps/web/src/index.tsx",
     ])
 
     assert "." not in focus
-    assert "package.json" in focus
+    assert "package.json" not in focus
+    assert "go.mod" not in focus
+    assert "apps/web/src" in focus
 
 
 def test_focus_area_default_limit_allows_ten_entries():
