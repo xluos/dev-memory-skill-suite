@@ -840,6 +840,10 @@ function renderContent() {
     content.appendChild(bs);
   }
 
+  var previewBtn = el("button", { class: "icon-btn", style: "margin-bottom: 16px;" }, "👁 注入预览");
+  previewBtn.onclick = function () { openInjectionPreview(repo.key, cur.name); };
+  content.appendChild(previewBtn);
+
   var branchMdFiles = cur.files.filter(function (f) { return f.name.endsWith(".md"); });
   if (branchMdFiles.length === 0) {
     content.appendChild(el("div", { class: "empty-state" }, "该分支暂无记忆文件"));
@@ -987,6 +991,43 @@ function closeModal() {
   modalState.relPath = null;
   modalState.text = "";
   modalState.editing = false;
+}
+
+function openInjectionPreview(repoKey, branchName) {
+  modalState.relPath = null;
+  modalState.text = "";
+  modalState.editing = false;
+  q("#modalTitle").textContent = "注入预览 — " + branchName;
+  q("#modalEdit").hidden = true;
+  q("#modalSave").hidden = true;
+  q("#modalCancel").hidden = true;
+  setModalStatus("");
+  var body = q("#modalBody");
+  body.innerHTML = "";
+  body.appendChild(el("span", { class: "loading" }, "生成注入预览…"));
+  q("#modal").classList.add("open");
+
+  fetch("/api/injection-preview?repo=" + encodeURIComponent(repoKey) + "&branch=" + encodeURIComponent(branchName))
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      body.innerHTML = "";
+      if (data.error) {
+        body.appendChild(el("pre", { class: "raw" }, "错误：" + data.error));
+        return;
+      }
+      var text = data.context || "(空)";
+      var pre = document.createElement("pre");
+      pre.className = "raw";
+      pre.style.whiteSpace = "pre-wrap";
+      pre.style.wordBreak = "break-word";
+      pre.textContent = text;
+      body.appendChild(pre);
+      setModalStatus(text.length + " 字符", "success");
+    })
+    .catch(function (err) {
+      body.innerHTML = "";
+      body.appendChild(el("pre", { class: "raw" }, "请求失败：" + err.message));
+    });
 }
 
 function loadTree() {

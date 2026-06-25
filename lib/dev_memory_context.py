@@ -103,6 +103,33 @@ def command_sync(args):
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+def command_injection_preview(args):
+    """Render the SessionStart injection context for a given repo_key + branch,
+    without needing an actual git working tree. Used by the UI panel."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "hooks"))
+    from _common import _build_context_from_assets  # noqa: E402
+    from dev_memory_common import asset_paths as _asset_paths  # noqa: E402
+
+    storage_root = Path(args.context_dir) if args.context_dir else Path.home() / ".dev-memory" / "repos"
+    repo_dir = storage_root / args.repo_key
+    branch_dir = repo_dir / "branches" / args.branch.replace("/", "__")
+
+    if not branch_dir.exists():
+        print(json.dumps({"error": f"branch dir not found: {branch_dir}"}, ensure_ascii=False))
+        return 1
+
+    paths = _asset_paths(repo_dir, branch_dir)
+    assets = {
+        "repo_dir": repo_dir,
+        "branch_dir": branch_dir,
+        "branch_name": args.branch,
+        "paths": paths,
+    }
+    context = _build_context_from_assets(assets, full=True)
+    print(json.dumps({"context": context or ""}, ensure_ascii=False))
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Read or refresh repo+branch development assets.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -113,12 +140,19 @@ def main():
         sub.add_argument("--context-dir", help="User-home storage root. Defaults to ~/.dev-memory/repos")
         sub.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
 
+    preview_sub = subparsers.add_parser("injection-preview")
+    preview_sub.add_argument("--repo-key", required=True, help="Repo key (directory name under storage root)")
+    preview_sub.add_argument("--branch", required=True, help="Branch name (original, with slashes)")
+    preview_sub.add_argument("--context-dir", help="Storage root. Defaults to ~/.dev-memory/repos")
+
     args = parser.parse_args()
     try:
         if args.command == "show":
             command_show(args)
-        else:
+        elif args.command == "sync":
             command_sync(args)
+        elif args.command == "injection-preview":
+            return command_injection_preview(args)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
