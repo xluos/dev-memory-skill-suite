@@ -69,7 +69,7 @@ sessions.write_text((sessions.read_text() if sessions.exists() else "") + sessio
 if count == 0:
     print("not json")
 else:
-    print(json.dumps({"title": "ok", "progress": "worker 重试成功"}, ensure_ascii=False))
+    print(json.dumps({"title": "ok", "glossary": ["worker 重试成功"]}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -99,8 +99,8 @@ else:
         f"summary-session-1|{expected_uuid}",
         f"summary-session-1|{expected_uuid}",
     ]
-    progress = branch_dir["paths"]["progress"].read_text(encoding="utf-8")
-    assert "worker 重试成功" in progress
+    glossary = branch_dir["paths"]["glossary"].read_text(encoding="utf-8")
+    assert "worker 重试成功" in glossary
 
 
 def test_worker_moves_noop_summary_to_skipped(branch_dir, tmp_path):
@@ -189,11 +189,11 @@ sessions.write_text((sessions.read_text() if sessions.exists() else "") + sessio
 if count == 0:
     print(json.dumps({
         "title": "bad rewrite",
-        "progress": "不应因为坏 rewrite 部分落盘",
+        "glossary": ["不应因为坏 rewrite 部分落盘"],
         "rewrites": [{"id": "decisions::0::99", "content": "不存在", "reason": "测试"}]
     }, ensure_ascii=False))
 else:
-    print(json.dumps({"title": "ok", "progress": "apply 重试成功"}, ensure_ascii=False))
+    print(json.dumps({"title": "ok", "glossary": ["apply 重试成功"]}, ensure_ascii=False))
 """,
         encoding="utf-8",
     )
@@ -218,6 +218,6 @@ else:
         f"summary-session-1|{expected_uuid}",
         f"summary-session-1|{expected_uuid}",
     ]
-    progress = branch_dir["paths"]["progress"].read_text(encoding="utf-8")
-    assert "apply 重试成功" in progress
-    assert "不应因为坏 rewrite 部分落盘" not in progress
+    glossary = branch_dir["paths"]["glossary"].read_text(encoding="utf-8")
+    assert "apply 重试成功" in glossary
+    assert "不应因为坏 rewrite 部分落盘" not in glossary

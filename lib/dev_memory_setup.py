@@ -102,8 +102,6 @@ def command_init(args):
 
 _SETUP_KIND_TO_TARGET = {
     "decision": ("decisions", "关键决策与原因"),
-    "progress": ("progress", "当前进展"),
-    "next": ("progress", "下一步"),
     "risk": ("risks", "阻塞与注意点"),
     "glossary": ("glossary", "当前有效上下文"),
     "source": ("glossary", "分支源资料入口"),

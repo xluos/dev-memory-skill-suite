@@ -347,11 +347,8 @@ _FULL_SECTION_KEYS = (
     ("progress", "建议优先查看的目录"),
     ("overview", "当前目标"),
     ("overview", "范围边界"),
-    ("overview", "当前阶段"),
     ("overview", "关键约束"),
-    ("progress", "当前进展"),
     ("risks", "阻塞与注意点"),
-    ("progress", "下一步"),
     ("decisions", "关键决策与原因"),
     ("risks", "后续继续前要注意"),
     ("repo_overview", None),
@@ -361,9 +358,7 @@ _FULL_SECTION_KEYS = (
 
 _BRIEF_SECTION_KEYS = (
     ("overview", "当前目标"),
-    ("overview", "当前阶段"),
-    ("progress", "当前进展"),
-    ("progress", "下一步"),
+    ("glossary", "当前有效上下文"),
 )
 
 
@@ -880,10 +875,11 @@ transcript 过滤（extract-core 已执行；这里是核对规则）：
 
 写入原则：
 - 先结合现有记忆判断每条信息是新增、改写、删除/归档还是跳过。
-- 已完成且不再影响后续工作的状态，不要追加成”已完成 XXX”；应覆盖 progress/next，或通过 rewrite-entry/tidy 删除旧条目。
+- 已完成且不再影响后续工作的状态，不要追加——通过 rewrite-entry/tidy 删除旧条目。
 - 旧结论失效时优先 rewrite-entry 或 tidy 删除，不要追加一条相反结论让两条并存。
-- progress / next 是当前态，用 upsert 语义；decision / risk / glossary 是累计条目，但也要避免重复。
+- decision / risk / glossary 是累计条目，注意避免重复。
 - 只在确有新增或更新时写入。没有有效新增时只输出 `skip_reason`，代码会把 job 标记为 skipped。
+- 不要写”当前进展”、”下一步”、”当前阶段”等时效性状态——这些天然会过期；记忆应聚焦稳定的决策、约束、上下文和参考信息。
 
 file_map（功能文件索引）：
 - 用途：让后续 agent 听到”改下操作弹窗”就能直接定位文件，不用搜索。
@@ -897,23 +893,21 @@ file_map（功能文件索引）：
 - 只输出一个 summary-output JSON 对象，不要输出 markdown fence、解释文字或命令。
 - summary-output 格式：
   {{
-    "title": "简短标题",
-    "progress": "当前进展，覆盖 progress.md 的当前进展 section",
-    "next": "下一步，覆盖 progress.md 的下一步 section",
-    "file_map": [{{"label": "功能/组件名", "paths": ["相对路径"]}}],
-    "decisions": [{{"summary": "结论", "reason": "为什么", "impact": "影响范围"}}],
-    "risks": ["风险/坑/阻塞"],
-    "glossary": ["术语/上下文/命令/外部系统入口"],
-    "shared_decisions": [{{"summary": "跨分支规则", "reason": "为什么", "impact": "适用范围"}}],
-    "shared_context": ["仓库级长期背景"],
-    "shared_sources": ["仓库级共享入口"],
-    "upserts": [{{"kind": "progress", "content": "显式覆盖某个 kind"}}],
-    "appends": [{{"kind": "decision", "content": "显式追加某个 kind"}}],
-    "rewrites": [{{"id": "decisions::0::2", "content": "新条目", "reason": "旧结论失效"}}],
-    "deletes": [{{"id": "risks::0::1", "reason": "风险已解除"}}],
-    "skip_reason": "没有新增有效内容"
+    “title”: “简短标题”,
+    “file_map”: [{{“label”: “功能/组件名”, “paths”: [“相对路径”]}}],
+    “decisions”: [{{“summary”: “结论”, “reason”: “为什么”, “impact”: “影响范围”}}],
+    “risks”: [“风险/坑/阻塞”],
+    “glossary”: [“术语/上下文/命令/外部系统入口”],
+    “shared_decisions”: [{{“summary”: “跨分支规则”, “reason”: “为什么”, “impact”: “适用范围”}}],
+    “shared_context”: [“仓库级长期背景”],
+    “shared_sources”: [“仓库级共享入口”],
+    “upserts”: [{{“kind”: “overview”, “content”: “覆盖某个 kind”}}],
+    “appends”: [{{“kind”: “decision”, “content”: “追加某个 kind”}}],
+    “rewrites”: [{{“id”: “decisions::0::2”, “content”: “新条目”, “reason”: “旧结论失效”}}],
+    “deletes”: [{{“id”: “risks::0::1”, “reason”: “风险已解除”}}],
+    “skip_reason”: “没有新增有效内容”
   }}
-- 字段可省略；不要输出空字段。若只更新 progress/next，只传这两个字段即可。
+- 字段可省略；不要输出空字段。
 - 发现旧条目需要改写/删除时，不要追加矛盾条目。优先在 summary-output 的 rewrites/deletes 中表达。
 - 不要调用任何 dev-memory-cli 命令；代码会校验 JSON、落盘、处理 dedup，并移动 job。
 

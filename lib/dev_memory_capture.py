@@ -677,11 +677,8 @@ KIND_MAP = {
     "glossary": {"file": "glossary", "section": "当前有效上下文", "default_mode": "append"},
     "source": {"file": "glossary", "section": "分支源资料入口", "default_mode": "append"},
     # snapshot (section always reflects the latest state; new write replaces)
-    "progress": {"file": "progress", "section": "当前进展", "default_mode": "upsert"},
-    "next": {"file": "progress", "section": "下一步", "default_mode": "upsert"},
     "overview": {"file": "overview", "section": "当前目标", "default_mode": "upsert"},
     "scope": {"file": "overview", "section": "范围边界", "default_mode": "upsert"},
-    "stage": {"file": "overview", "section": "当前阶段", "default_mode": "upsert"},
     "constraint": {"file": "overview", "section": "关键约束", "default_mode": "upsert"},
     # repo-shared: decisions/context/source accumulate, overview/constraint snapshot
     "shared-decision": {"file": "repo_decisions", "section": "跨分支通用决策", "default_mode": "append"},
@@ -842,9 +839,6 @@ def _finalize_worktree_writeback(ctx, repo_root, repo_key, storage_root):
 # same kind; that's fine — the write layer upserts.
 SESSION_PAYLOAD_MAP = [
     ("overview_summary", "overview", None),
-    ("implementation_notes", "progress", None),
-    ("changes", "progress", None),
-    ("next_steps", "next", None),
     ("risks", "risk", None),
     ("memory", "glossary", None),
     ("context_updates", "glossary", None),
@@ -856,10 +850,7 @@ SESSION_PAYLOAD_MAP = [
     ("source_updates", "shared-source", None),
 ]
 
-SESSION_DIRECT_PAYLOAD_MAP = [
-    ("progress", "progress"),
-    ("next", "next"),
-]
+SESSION_DIRECT_PAYLOAD_MAP = []
 
 SESSION_EXTRA_PAYLOAD_MAP = [
     ("glossary", "glossary", None),
@@ -1552,8 +1543,6 @@ def command_apply_summary_output(args):
 
     # Convenience summary-output fields. These mirror --summary-json but keep
     # execution in code instead of making the agent compose CLI calls.
-    add_write("progress", payload.get("progress"), source="progress")
-    add_write("next", payload.get("next"), source="next")
     for item in payload.get("decisions") or []:
         add_write("decision", _decision_content(item), source="decisions")
     for item in payload.get("risks") or []:

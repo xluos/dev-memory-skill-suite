@@ -52,14 +52,14 @@ def test_worktree_writeback_skips_snapshot_kind(branch_dir, tmp_repo, tmp_storag
 
     code, payload = _run_record(
         branch_dir,
-        kind="progress",
-        content="worktree-only progress",
+        kind="overview",
+        content="worktree-only overview",
     )
 
     assert code == 0
     assert "worktree_writeback" not in payload
-    assert "worktree-only progress" in branch_dir["paths"]["progress"].read_text(encoding="utf-8")
-    assert "worktree-only progress" not in source["paths"]["progress"].read_text(encoding="utf-8")
+    assert "worktree-only overview" in branch_dir["paths"]["overview"].read_text(encoding="utf-8")
+    assert "worktree-only overview" not in source["paths"]["overview"].read_text(encoding="utf-8")
 
 
 def test_apply_summary_output_worktree_writeback_mirrors_append_kind(

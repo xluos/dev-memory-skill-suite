@@ -40,10 +40,9 @@ REPO_FILE_KEYS = (
 )
 
 READ_ORDER = (
-    "progress",
-    "risks",
-    "decisions",
     "glossary",
+    "decisions",
+    "risks",
     "overview",
     "repo_decisions",
     "repo_glossary",

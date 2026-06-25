@@ -28,8 +28,6 @@ from _common import (  # noqa: E402
 
 ALLOWED_KEYS = {
     "title",
-    "progress",
-    "next",
     "decisions",
     "risks",
     "glossary",
@@ -74,7 +72,7 @@ def validate_summary_output(payload):
     unknown = sorted(set(payload) - ALLOWED_KEYS)
     if unknown:
         raise ValueError(f"unknown fields: {', '.join(unknown)}")
-    for field in ("title", "progress", "next", "skip_reason"):
+    for field in ("title", "skip_reason"):
         _ensure_str(payload.get(field), field)
     for field in ("risks", "glossary", "shared_context", "shared_sources"):
         value = payload.get(field)

@@ -32,7 +32,7 @@ def test_read_show_reports_exact_current_branch_paths(branch_dir):
     assert payload["branch_exists"] is True
     assert payload["branch_dir"] == str(branch_dir["branch_dir"])
     assert payload["branch_files"]["progress"]["exists"] is True
-    assert payload["recommended_read_order"][0]["key"] == "progress"
+    assert payload["recommended_read_order"][0]["key"] == "glossary"
 
 
 def test_read_search_current_scope_searches_branch_and_repo(seed_branch_files, branch_dir):

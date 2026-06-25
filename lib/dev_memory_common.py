@@ -581,7 +581,6 @@ def template_overview(branch_name):
             ("分支", f"- {branch_name}"),
             ("当前目标", "- 待补充"),
             ("范围边界", "- 待补充"),
-            ("当前阶段", "- 待补充"),
             ("关键约束", "- 待补充"),
         ],
     )
@@ -599,12 +598,10 @@ def template_decisions(branch_name):
 
 def template_progress(branch_name):
     return render_title_doc(
-        "当前进展",
+        "自动索引",
         [
             ("分支", f"- {branch_name}"),
             ("建议优先查看的目录", "- 待刷新"),
-            ("当前进展", "- 待补充"),
-            ("下一步", "- 待补充"),
             (
                 "自动同步区",
                 "本区由 `dev-memory-cli capture sync-working-tree` / SessionStart hook 自动刷新，请不要手工编辑。\n\n"
@@ -684,11 +681,9 @@ def template_repo_log(repo_name):
 
 def template_progress_no_git(project_name):
     return render_title_doc(
-        "当前进展（no-git 模式）",
+        "自动索引（no-git 模式）",
         [
             ("项目", f"- {project_name}"),
-            ("当前进展", "- 待补充"),
-            ("下一步", "- 待补充"),
             (
                 "自动同步区",
                 "本区由 capture / context 刷新。no-git 模式下无 git facts，保持最小骨架。\n\n"
@@ -950,6 +945,8 @@ def migrate_v1_to_v2_branch(branch_dir, branch_name):
     written = []
 
     progress_sections = list(merged_buckets.get("progress", []))
+    progress_sections = [(t, b) for t, b in progress_sections
+                         if t not in ("当前进展", "下一步")]
     if auto_block is not None:
         progress_sections.append((
             "自动同步区",
@@ -959,7 +956,7 @@ def migrate_v1_to_v2_branch(branch_dir, branch_name):
     if progress_sections:
         target = branch_dir / "progress.md"
         target.write_text(
-            render_title_doc("当前进展", [header] + progress_sections),
+            render_title_doc("自动索引", [header] + progress_sections),
             encoding="utf-8",
         )
         written.append("progress.md")
@@ -1243,7 +1240,6 @@ _CLASSIFY_PATTERNS = [
     ("decision", re.compile(r"结论[:：]|决[定议][:：]|不再|改为|采用|废弃|选择.+?不选|abandoned|adopt")),
     ("risk", re.compile(r"阻塞|注意|坑|失败|风险|卡住|gotcha|caveat|warning")),
     ("glossary", re.compile(r"即[:：]|\s即\s|指的是|对应|链接|https?://|api\s*=|缩写|术语|简称|别名")),
-    ("progress", re.compile(r"当前|已完成|下一步|commit|提交|实现|进展|todo|wip")),
 ]
 
 
