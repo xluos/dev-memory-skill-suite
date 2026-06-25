@@ -341,6 +341,8 @@ def maybe_record_head():
 # "后续继续前要注意"; decisions.md carries "关键决策与原因"; glossary.md carries
 # "当前有效上下文".
 _FULL_SECTION_KEYS = (
+    ("glossary", "分支源资料入口"),
+    ("glossary", "当前有效上下文"),
     ("progress", "建议优先查看的目录"),
     ("overview", "当前目标"),
     ("overview", "范围边界"),
@@ -349,7 +351,6 @@ _FULL_SECTION_KEYS = (
     ("progress", "当前进展"),
     ("risks", "阻塞与注意点"),
     ("progress", "下一步"),
-    ("glossary", "当前有效上下文"),
     ("decisions", "关键决策与原因"),
     ("risks", "后续继续前要注意"),
     ("repo_overview", None),
@@ -372,6 +373,13 @@ _RECENT_FIRST_SECTIONS = {
     ("glossary", "当前有效上下文"),
     ("glossary", "分支源资料入口"),
 }
+
+_BRANCH_REFERENCE_SECTIONS = {
+    ("glossary", "当前有效上下文"),
+    ("glossary", "分支源资料入口"),
+}
+_BRANCH_REF_MAX_LINES = 128
+_BRANCH_REF_MAX_CHARS = 12000
 
 _REPO_LEVEL_KEYS = {
     "repo_overview",
@@ -437,6 +445,8 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
             continue
         if full and file_key in _REPO_LEVEL_KEYS:
             eff_lines, eff_chars = _REPO_MAX_LINES, _REPO_MAX_CHARS
+        elif full and (file_key, title) in _BRANCH_REFERENCE_SECTIONS:
+            eff_lines, eff_chars = _BRANCH_REF_MAX_LINES, _BRANCH_REF_MAX_CHARS
         else:
             eff_lines, eff_chars = max_lines, max_chars
         if (file_key, title) in _RECENT_FIRST_SECTIONS:
