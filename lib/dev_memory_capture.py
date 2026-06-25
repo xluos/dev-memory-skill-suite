@@ -690,7 +690,7 @@ KIND_MAP = {
     "shared-overview": {"file": "repo_overview", "section": "长期目标与边界", "default_mode": "upsert"},
     "shared-constraint": {"file": "repo_overview", "section": "仓库级关键约束", "default_mode": "upsert"},
     # semantic file map: agent outputs merged mapping each session
-    "filemap": {"file": "progress", "section": "组件文件映射", "default_mode": "upsert"},
+    "filemap": {"file": "progress", "section": "功能文件索引", "default_mode": "upsert"},
     # fallback bins always accumulate
     "unsorted": {"file": "unsorted", "section": "待分类", "default_mode": "append"},
     "pending": {"file": "pending_promotion", "section": "候选条目", "default_mode": "append"},

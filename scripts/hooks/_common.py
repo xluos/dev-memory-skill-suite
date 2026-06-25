@@ -343,7 +343,7 @@ def maybe_record_head():
 _FULL_SECTION_KEYS = (
     ("glossary", "分支源资料入口"),
     ("glossary", "当前有效上下文"),
-    ("progress", "组件文件映射"),
+    ("progress", "功能文件索引"),
     ("progress", "建议优先查看的目录"),
     ("overview", "当前目标"),
     ("overview", "范围边界"),
@@ -378,7 +378,7 @@ _RECENT_FIRST_SECTIONS = {
 _BRANCH_REFERENCE_SECTIONS = {
     ("glossary", "当前有效上下文"),
     ("glossary", "分支源资料入口"),
-    ("progress", "组件文件映射"),
+    ("progress", "功能文件索引"),
 }
 _BRANCH_REF_MAX_LINES = 128
 _BRANCH_REF_MAX_CHARS = 12000
@@ -885,11 +885,11 @@ transcript 过滤（extract-core 已执行；这里是核对规则）：
 - progress / next 是当前态，用 upsert 语义；decision / risk / glossary 是累计条目，但也要避免重复。
 - 只在确有新增或更新时写入。没有有效新增时只输出 `skip_reason`，代码会把 job 标记为 skipped。
 
-file_map（组件文件映射）：
+file_map（功能文件索引）：
 - 用途：让后续 agent 听到”改下操作弹窗”就能直接定位文件，不用搜索。
 - 每条 label 是业务语义名（页面/弹窗/侧拉/组件/表单等），paths 是对应文件的仓库相对路径。
 - 粒度到组件/功能即可，不要写具体逻辑，agent 定位到文件后自己读。
-- 增量 merge：读 existing_memory 里已有的组件文件映射，结合本次会话改动判断——新涉及的组件加入、已有条目路径变了就更新、描述不准的修正、分支里已删除的组件移除。
+- 增量 merge：读 existing_memory 里已有的功能文件索引，结合本次会话改动判断——新涉及的组件加入、已有条目路径变了就更新、描述不准的修正、分支里已删除的组件移除。
 - 输出合并后的**完整映射**（不是增量 diff），代码侧直接覆盖整个 section。
 - 没有文件变更或映射无变化时省略此字段。
 
