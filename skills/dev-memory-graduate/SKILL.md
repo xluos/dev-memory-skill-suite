@@ -1,6 +1,6 @@
 ---
 name: dev-memory-graduate
-description: 当用户显式说分支结束工作需要归档、收尾、沉淀时使用 —— 触发词："归档"、"分支收尾"、"需求做完了"、"merge 完了清一下"、"这个分支可以归档了"、"把分支知识沉淀一下"。本 skill 从分支记忆里提炼跨分支可复用知识到 repo 共享层，然后归档分支目录到 `branches/_archived/`。v2 优先扫 `pending-promotion.md`（capture 自动标记的跨分支候选），大幅缩小人工审核面。destructive move 必须显式用户触发，不 implicit。非 git 项目无分支概念，本 skill 直接拒绝。
+description: 归档分支记忆：提炼跨分支知识到 repo 共享层，然后归档分支目录。触发词："归档"、"分支收尾"、"需求做完了"、"merge 完了清一下"。
 ---
 
 # Dev Memory Graduate

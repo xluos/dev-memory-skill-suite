@@ -1,6 +1,6 @@
 ---
 name: dev-memory-setup
-description: 整理 unsorted.md 里 lazy-init 期间积累的未分类内容，按 decisions/progress/risks/glossary 分类到结构化文件，补充元信息，并把分支记忆标记为 setup_completed。v2 不再是前置门禁 —— capture 永远能 lazy init，setup 只是"整理已有乱炖 + 补元信息"的 promotion 动作。触发词："整理 dev-memory"、"整理一下"、"初始化 dev-memory"、"这个仓库的记忆规整下"；或 unsorted.md 累积到 20+ 条。
+description: 把 unsorted.md 里未分类内容整理到结构化文件。触发词："整理 dev-memory"、"初始化 dev-memory"、"记忆规整下"。
 ---
 
 # Dev Memory Setup

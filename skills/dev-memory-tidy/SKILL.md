@@ -1,6 +1,6 @@
 ---
 name: dev-memory-tidy
-description: 整理已结构化的 dev-memory 记忆 —— 当条目随时间漂移（陈旧 / 重复 / 错误 / 模板占位残留）时，agent 把相关条目聚合成一个个**事项级 proposal**（"清掉 X / 重置 Y / 删除 section Z"），生成浏览器审阅页让用户对每个 proposal accept/reject、导出 plan.json，再 apply 落盘并自动备份。**按语义而非字面句式触发**，凡出现以下任一语义都要触发：1) 用户说"整理一下记忆"、"清下过期的"、"看看哪些还成立"、"记忆里好像有重复 / 旧条目 / 不对的地方"；2) 长期分支（master / main / develop 等）记忆累积到一定体量、context dump 看起来含 v1 残留 / 模板占位 / stale 信号；3) 用户做完一波 graduate 之后想再扫一遍剩下的；4) capture 改写单条不够用、需要批量 review 多条时。和 setup（unsorted → 分类）/ graduate（跨分支提炼+归档）的边界：tidy 不分类、不归档、不跨分支提炼，只对**已结构化**的条目做 keep/delete/edit/section-delete/file-reset。
+description: 批量清理已结构化的 dev-memory 条目（陈旧/重复/错误/模板残留）。触发词："清下过期的"、"看看哪些还成立"、"记忆有重复/旧条目"。不同于 setup（分类未分类）和 graduate（归档+跨分支提炼）。
 ---
 
 # Dev Memory Tidy

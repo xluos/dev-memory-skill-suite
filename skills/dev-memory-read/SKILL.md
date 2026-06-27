@@ -1,6 +1,6 @@
 ---
 name: dev-memory-read
-description: 主动读取 dev-memory 的唯一入口。当用户要求“重新读一下记忆 / 看之前记的 todo / 按记忆里的最新口径 / 你自己去读记忆”，或 agent 判断需要主动查当前仓库/分支记忆来恢复上下文、核对旧 TODO、查字段口径、找源资料入口时使用。先用 CLI 精确定位 repo_key / branch_key / 权威文件路径，再按关键词搜索当前 repo 的记忆文件；禁止在仓库或全局 memory 里盲目 find/rg。只读不写，不 lazy-init 新记忆，不替代 capture/setup/tidy/graduate。
+description: 读取 dev-memory 的入口。用户要求查看/重读记忆，或 agent 需要主动查当前仓库/分支记忆时使用。只读不写。
 ---
 
 # Dev Memory Read
