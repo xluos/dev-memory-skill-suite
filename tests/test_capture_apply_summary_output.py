@@ -129,3 +129,48 @@ def test_apply_summary_output_preflights_targeted_edits(seed_branch_files):
 
     assert code == 1
     assert "entry_idx 99" in out["error"]
+
+
+def test_apply_summary_output_compacts_shared_decisions(branch_dir):
+    payload = {
+        "shared_decisions": [
+            {
+                "summary": "启动本地服务前先探测现有进程",
+                "reason": "避免重复启动占端口",
+                "impact": "所有前端本地验证",
+            }
+        ]
+    }
+
+    code, out = _run_apply(branch_dir, payload)
+
+    assert code == 0
+    touched = {(item["file"], item["section"], item["mode"]) for item in out["touched_targets"]}
+    assert ("repo/decisions.md", "跨分支通用决策", "append") in touched
+    repo_decisions = branch_dir["paths"]["repo_decisions"].read_text(encoding="utf-8")
+    assert "启动本地服务前先探测现有进程" in repo_decisions
+    assert "- 原因:" not in repo_decisions
+    assert "- 影响范围:" not in repo_decisions
+
+
+def test_apply_summary_output_prunes_repo_shared_sections(seed_branch_files):
+    old_entries = "\n".join(f"- 旧共享规则 {idx}" for idx in range(25))
+    branch = seed_branch_files({
+        "repo_decisions": (
+            "# 跨分支通用决策\n\n"
+            "## 仓库\n\n"
+            "- test-repo\n\n"
+            "## 跨分支通用决策\n\n"
+            f"{old_entries}\n"
+        ),
+    })
+
+    code, out = _run_apply(branch, {"title": "无新增", "skip_reason": "没有新增有效内容"})
+
+    assert code == 0
+    assert any(action["op"] == "prune-repo-shared" for action in out["actions"])
+    repo_decisions = branch["paths"]["repo_decisions"].read_text(encoding="utf-8")
+    assert "旧共享规则 0" not in repo_decisions
+    assert "旧共享规则 4" not in repo_decisions
+    assert "旧共享规则 5" in repo_decisions
+    assert "旧共享规则 24" in repo_decisions

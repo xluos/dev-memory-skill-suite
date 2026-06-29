@@ -77,6 +77,8 @@ def test_build_summary_prompt_embeds_job_path():
     assert "SUMMARY_INPUT_JSON" in prompt
     assert "不要调用 `dev-memory-cli summary extract-core`" in prompt
     assert "dev-memory-cli summary extract-core \"" not in prompt
+    assert "repo 共享层淘汰规则" in prompt
+    assert "约 10-20 条" in prompt
     assert "工具调用" in prompt
     assert "现有 dev-memory" in prompt
     assert "不要追加" in prompt

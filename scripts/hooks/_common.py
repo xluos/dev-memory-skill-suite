@@ -341,19 +341,19 @@ def maybe_record_head():
 # "后续继续前要注意"; decisions.md carries "关键决策与原因"; glossary.md carries
 # "当前有效上下文".
 _FULL_SECTION_KEYS = (
-    ("glossary", "分支源资料入口"),
-    ("glossary", "当前有效上下文"),
     ("progress", "功能文件索引"),
     ("progress", "建议优先查看的目录"),
+    ("repo_decisions", None),
+    ("repo_glossary", None),
+    ("glossary", "分支源资料入口"),
     ("overview", "当前目标"),
     ("overview", "范围边界"),
     ("overview", "关键约束"),
+    ("repo_overview", None),
+    ("glossary", "当前有效上下文"),
     ("risks", "阻塞与注意点"),
     ("decisions", "关键决策与原因"),
     ("risks", "后续继续前要注意"),
-    ("repo_overview", None),
-    ("repo_decisions", None),
-    ("repo_glossary", None),
 )
 
 _BRIEF_SECTION_KEYS = (
@@ -389,6 +389,12 @@ _REPO_DISPLAY_TITLES = {
     "repo_decisions": "跨分支通用决策",
     "repo_glossary": "仓库共享术语与入口",
 }
+_HIGH_PRIORITY_WRAPPERS = {
+    ("progress", "功能文件索引"): "file_map",
+    ("progress", "建议优先查看的目录"): "read_first_dirs",
+    ("repo_decisions", None): "shared_decisions",
+    ("repo_glossary", None): "long_term_context",
+}
 _REPO_MAX_LINES = 32
 _REPO_MAX_CHARS = 3000
 
@@ -402,7 +408,8 @@ def _extract_sections(paths, keys):
         else:
             body = extract_section(paths[file_key], title)
             display_title = title
-        out.append((display_title, body, file_key))
+        wrapper = _HIGH_PRIORITY_WRAPPERS.get((file_key, title))
+        out.append((display_title, body, file_key, title, wrapper))
     return out
 
 
@@ -437,20 +444,22 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
     # the footer's directory header (.../branches/<branch>/).
 
     any_truncated = False
-    for title, body, file_key in sections:
+    for title, body, file_key, source_title, wrapper in sections:
         if not body:
             continue
         if full and file_key in _REPO_LEVEL_KEYS:
             eff_lines, eff_chars = _REPO_MAX_LINES, _REPO_MAX_CHARS
-        elif full and (file_key, title) in _BRANCH_REFERENCE_SECTIONS:
+        elif full and (file_key, source_title) in _BRANCH_REFERENCE_SECTIONS:
             eff_lines, eff_chars = _BRANCH_REF_MAX_LINES, _BRANCH_REF_MAX_CHARS
         else:
             eff_lines, eff_chars = max_lines, max_chars
-        if (file_key, title) in _RECENT_FIRST_SECTIONS:
+        if (file_key, source_title) in _RECENT_FIRST_SECTIONS:
             compacted, truncated = compact_recent_body(body, max_lines=eff_lines, max_chars=eff_chars)
         else:
             compacted, truncated = compact_body(body, max_lines=eff_lines, max_chars=eff_chars)
-        if full and file_key in _REPO_LEVEL_KEYS:
+        if wrapper:
+            block = f"<{wrapper}>\n{compacted}\n</{wrapper}>"
+        elif full and file_key in _REPO_LEVEL_KEYS:
             block = compacted
         else:
             block = f"{title}:\n{compacted}"
@@ -881,6 +890,14 @@ transcript 过滤（extract-core 已执行；这里是核对规则）：
 - 只在确有新增或更新时写入。没有有效新增时只输出 `skip_reason`，代码会把 job 标记为 skipped。
 - 不要写”当前进展”、”下一步”、”当前阶段”等时效性状态——这些天然会过期；记忆应聚焦稳定的决策、约束、上下文和参考信息。
 
+repo 共享层淘汰规则：
+- `shared_decisions` / `shared_context` / `shared_sources` 是跨分支长期记忆，不是会话归档，也不是分支任务备忘。
+- 只有“以后所有分支都需要优先知道”的规则、背景、入口才写 shared；普通业务细节、一次性调试结论、某分支当前状态写 branch 层或跳过。
+- repo 共享层默认只保留最重要的少量条目（约 10-20 条）；新增 shared 前先看 existing_memory，若旧条目已过时、重复、太长，优先输出 `rewrites` / `deletes` 压缩旧内容。
+- `shared_decisions` 的 summary 必须是一条短完整规则；除非必要，不要填 reason/impact。不要把“结论/原因/影响范围”拆成三条长期条目。
+- `shared_context` / `shared_sources` 每条尽量不超过 1 句；不要把交接说明、模块清单、会议纪要整段塞入 repo 共享层。
+- 代码落盘后还会自动对 repo shared section 做确定性修剪：保留最近约 20 条，单条过长会压成首句。因此你应主动写得精炼，避免重要信息被截断。
+
 file_map（功能文件索引）：
 - 用途：让后续 agent 听到”改下操作弹窗”就能直接定位文件，不用搜索。
 - 每条 label 是业务语义名（页面/弹窗/侧拉/组件/表单等），paths 是对应文件的仓库相对路径。
@@ -898,9 +915,9 @@ file_map（功能文件索引）：
     “decisions”: [{{“summary”: “结论”, “reason”: “为什么”, “impact”: “影响范围”}}],
     “risks”: [“风险/坑/阻塞”],
     “glossary”: [“术语/上下文/命令/外部系统入口”],
-    “shared_decisions”: [{{“summary”: “跨分支规则”, “reason”: “为什么”, “impact”: “适用范围”}}],
-    “shared_context”: [“仓库级长期背景”],
-    “shared_sources”: [“仓库级共享入口”],
+    “shared_decisions”: [{{“summary”: “短句跨分支规则”}}],
+    “shared_context”: [“一句话仓库级长期背景”],
+    “shared_sources”: [“一句话仓库级共享入口”],
     “upserts”: [{{“kind”: “overview”, “content”: “覆盖某个 kind”}}],
     “appends”: [{{“kind”: “decision”, “content”: “追加某个 kind”}}],
     “rewrites”: [{{“id”: “decisions::0::2”, “content”: “新条目”, “reason”: “旧结论失效”}}],

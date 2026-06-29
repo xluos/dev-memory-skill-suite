@@ -162,6 +162,20 @@ SUPERSEDES_KEYWORDS = (
 _SIM_PREVIEW_LEN = 80
 
 
+def _int_env(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+_REPO_SHARED_MAX_ENTRIES = _int_env("DEV_MEMORY_REPO_SHARED_MAX_ENTRIES", 20)
+_REPO_SHARED_MAX_ENTRY_CHARS = _int_env("DEV_MEMORY_REPO_SHARED_MAX_ENTRY_CHARS", 260)
+
+
 def _first_nonempty_line(text):
     """Return the first non-blank line of `text`, stripped. Empty string if
     `text` is all blank. Used as the comparison anchor for similarity_check
@@ -892,6 +906,110 @@ def decision_body(item):
     return "\n".join(parts)
 
 
+def compact_decision_body(item):
+    """Render a repo-shared decision as one short bullet.
+
+    Branch decisions can afford reason/impact substructure because they are
+    read on demand. Repo shared decisions are injected into every branch, so
+    each item must be a compact standalone rule.
+    """
+    summary = _decision_summary(item)
+    if not isinstance(item, dict):
+        return f"- {summary}"
+    extras = []
+    reason = str(item.get("reason") or "").strip()
+    impact = str(item.get("impact") or "").strip()
+    if reason:
+        extras.append(f"原因: {reason}")
+    if impact:
+        extras.append(f"适用: {impact}")
+    suffix = f"（{'；'.join(extras)}）" if extras else ""
+    return f"- {summary}{suffix}"
+
+
+def _compact_repo_shared_entry(entry, max_chars):
+    text = (entry or "").strip()
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    first = _strip_bullet_prefix(_first_nonempty_line(text))
+    if len(first) > max_chars:
+        first = first[: max_chars - 1].rstrip() + "…"
+    return f"- {first}"
+
+
+def _prune_repo_shared_section(path, section_title, *, max_entries, max_entry_chars):
+    if max_entries <= 0:
+        return None
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    prefix, sections = split_sections(content)
+    changed = False
+    updated = []
+    result = None
+    for existing_title, existing_body in sections:
+        if existing_title.strip() != section_title.strip():
+            updated.append((existing_title, existing_body))
+            continue
+        entries = [entry for _idx, entry in _section_top_level_entries(existing_body)]
+        if not entries:
+            updated.append((existing_title, existing_body))
+            continue
+        kept = entries[-max_entries:]
+        compacted = [_compact_repo_shared_entry(entry, max_entry_chars) for entry in kept]
+        compacted = [entry for entry in compacted if entry]
+        new_body = "\n\n".join(compacted)
+        pruned_count = max(0, len(entries) - len(kept))
+        if new_body.strip() != existing_body.strip():
+            changed = True
+        result = {
+            "file": "repo/decisions.md" if path.name == "decisions.md" else "repo/glossary.md",
+            "section": existing_title,
+            "mode": "prune",
+            "before": len(entries),
+            "after": len(compacted),
+            "pruned": pruned_count,
+            "max_entries": max_entries,
+            "max_entry_chars": max_entry_chars,
+        }
+        updated.append((existing_title, new_body))
+    if not changed:
+        return None
+    path.write_text(join_sections(prefix, updated), encoding="utf-8")
+    return result
+
+
+def prune_repo_shared_memory(paths, *, max_entries=None, max_entry_chars=None):
+    """Keep repo-shared memory small enough for SessionStart injection.
+
+    This is intentionally deterministic and conservative: newest entries win,
+    each entry is capped to its leading claim, and only repo shared sections are
+    touched. Deeper semantic cleanup still belongs to tidy/graduate.
+    """
+    max_entries = _REPO_SHARED_MAX_ENTRIES if max_entries is None else max_entries
+    max_entry_chars = _REPO_SHARED_MAX_ENTRY_CHARS if max_entry_chars is None else max_entry_chars
+    targets = (
+        ("repo_decisions", "跨分支通用决策"),
+        ("repo_glossary", "长期有效背景"),
+        ("repo_glossary", "共享入口"),
+        ("repo_glossary", "共享注意点"),
+    )
+    touched = []
+    for file_key, section in targets:
+        path = paths.get(file_key)
+        if not path:
+            continue
+        rec = _prune_repo_shared_section(
+            path,
+            section,
+            max_entries=max_entries,
+            max_entry_chars=max_entry_chars,
+        )
+        if rec:
+            touched.append(rec)
+    return touched
+
+
 # ---------------------------------------------------------------------------
 # Write primitives
 # ---------------------------------------------------------------------------
@@ -1215,7 +1333,7 @@ def command_record(args):
         shared_decision_payload_items = [
             item for item in (payload.get("shared_decisions") or []) if _decision_summary(item)
         ]
-        shared_decision_items = [decision_body(item) for item in shared_decision_payload_items]
+        shared_decision_items = [compact_decision_body(item) for item in shared_decision_payload_items]
         if shared_decision_items:
             body = "\n\n".join(shared_decision_items)
             rec = _write_or_block("shared-decision", body, source_label="payload[shared_decisions]")
@@ -1550,7 +1668,7 @@ def command_apply_summary_output(args):
     for item in payload.get("glossary") or []:
         add_write("glossary", item, source="glossary")
     for item in payload.get("shared_decisions") or []:
-        add_write("shared-decision", _decision_content(item), source="shared_decisions")
+        add_write("shared-decision", compact_decision_body(item), source="shared_decisions")
     for item in payload.get("shared_context") or []:
         add_write("shared-context", item, source="shared_context")
     for item in payload.get("shared_sources") or []:
@@ -1598,6 +1716,21 @@ def command_apply_summary_output(args):
             "deleted_first_line": mutation["previous_first_line"],
             "reason": item.get("reason"),
         })
+
+    pruned = prune_repo_shared_memory(paths)
+    if pruned:
+        touched.extend(pruned)
+        for rec in pruned:
+            actions.append({
+                "op": "prune-repo-shared",
+                "file": rec["file"],
+                "section": rec["section"],
+                "before": rec["before"],
+                "after": rec["after"],
+                "pruned": rec["pruned"],
+                "max_entries": rec["max_entries"],
+                "max_entry_chars": rec["max_entry_chars"],
+            })
 
     updated_at = now_iso()
 
