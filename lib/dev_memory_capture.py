@@ -449,6 +449,121 @@ def _check_dedup_for_kind(paths, kind, body, force=False, title_override=None, t
     return _build_dedup_hint(kind, file_key, section_title, body, matches)
 
 
+def _iter_search_targets(kind=None):
+    seen = set()
+    if kind:
+        spec = KIND_MAP.get(kind)
+        if not spec:
+            raise RuntimeError(f"unsupported kind: {kind}")
+        if spec.get("default_mode") != "append":
+            raise RuntimeError(f"kind {kind!r} is not append-style and cannot be searched for entry candidates")
+        targets = [(kind, spec)]
+    else:
+        targets = sorted(KIND_MAP.items())
+    for kind_name, spec in targets:
+        if spec.get("default_mode") != "append":
+            continue
+        file_key = spec["file"]
+        section_title = spec["section"]
+        key = (file_key, section_title)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield kind_name, file_key, section_title
+
+
+def _score_candidate(query, entry_text):
+    query = (query or "").strip()
+    if not query:
+        return 0.0
+    query_key = _strip_bullet_prefix(_first_nonempty_line(query))[:_SIM_PREVIEW_LEN]
+    first_key = _strip_bullet_prefix(_first_nonempty_line(entry_text))[:_SIM_PREVIEW_LEN]
+    full_key = " ".join(_strip_bullet_prefix(entry_text).split())[: max(_SIM_PREVIEW_LEN * 3, 1)]
+    first_ratio = difflib.SequenceMatcher(None, query_key, first_key).ratio() if first_key else 0.0
+    full_ratio = difflib.SequenceMatcher(None, query_key, full_key).ratio() if full_key else 0.0
+    return round(max(first_ratio, full_ratio), 4)
+
+
+def find_entry_candidates(paths, query, *, kind=None, limit=8, min_score=0.2):
+    """Search existing append-style memory entries for a correction target.
+
+    This is intentionally broader than dedup. Dedup protects append writes
+    from near duplicates in a single target section; correction workflows need
+    a read-only way to locate the old entry even when the replacement text is
+    not similar enough to trip the append-time threshold.
+    """
+    if not (query or "").strip():
+        raise RuntimeError("one of --query / --query-file is required")
+    candidates = []
+    for _kind_name, file_key, section_title in _iter_search_targets(kind):
+        target_path = paths[file_key]
+        if not target_path.exists():
+            continue
+        content = target_path.read_text(encoding="utf-8")
+        _prefix, sections = split_sections(content)
+        for section_idx, (title, body) in enumerate(sections):
+            if title.strip() != section_title.strip():
+                continue
+            for entry_idx, entry_text in _section_top_level_entries(body):
+                if _is_placeholder_entry(entry_text):
+                    continue
+                score = _score_candidate(query, entry_text)
+                if score < min_score:
+                    continue
+                candidates.append({
+                    "id": f"{file_key}::{section_idx}::{entry_idx}",
+                    "score": score,
+                    "file": _label(file_key),
+                    "section": title,
+                    "match_first_line": _strip_bullet_prefix(_first_nonempty_line(entry_text)),
+                    "match_full_text": entry_text,
+                })
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+    return candidates[:limit]
+
+
+def list_section_entries(paths, kind, *, limit=80, tail=False):
+    if kind not in KIND_MAP:
+        raise RuntimeError(f"unsupported kind: {kind}")
+    spec = KIND_MAP[kind]
+    file_key = spec["file"]
+    section_title = spec["section"]
+    target_path = paths[file_key]
+    entries = []
+    if target_path.exists():
+        content = target_path.read_text(encoding="utf-8")
+        _prefix, sections = split_sections(content)
+        for section_idx, (title, body) in enumerate(sections):
+            if title.strip() != section_title.strip():
+                continue
+            for entry_idx, entry_text in _section_top_level_entries(body):
+                if _is_placeholder_entry(entry_text):
+                    continue
+                entries.append({
+                    "id": f"{file_key}::{section_idx}::{entry_idx}",
+                    "entry_idx": entry_idx,
+                    "file": _label(file_key),
+                    "section": title,
+                    "first_line": _strip_bullet_prefix(_first_nonempty_line(entry_text)),
+                    "full_text": entry_text,
+                })
+    total = len(entries)
+    if limit is not None:
+        shown = entries[-limit:] if tail else entries[:limit]
+    else:
+        shown = entries
+    return {
+        "kind": kind,
+        "target_file": _label(file_key),
+        "section": section_title,
+        "total_entries": total,
+        "returned_entries": len(shown),
+        "truncated": len(shown) < total,
+        "tail": bool(tail),
+        "entries": shown,
+    }
+
+
 # ---------------------------------------------------------------------------
 # rewrite-entry primitives
 # ---------------------------------------------------------------------------
@@ -1211,6 +1326,68 @@ def command_classify(args):
     return 0
 
 
+def command_find_candidates(args):
+    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
+        args.repo, args.context_dir, args.branch
+    )
+    query = _load_optional_text(args.query, args.query_file)
+    if not query:
+        raise RuntimeError("one of --query / --query-file is required")
+    min_score = getattr(args, "min_score", 0.2)
+    if not (0.0 <= min_score <= 1.0):
+        raise RuntimeError(f"--min-score must be in [0.0, 1.0], got {min_score}")
+    if args.limit < 1:
+        raise RuntimeError(f"--limit must be >= 1, got {args.limit}")
+    candidates = find_entry_candidates(
+        paths,
+        query,
+        kind=args.kind,
+        limit=args.limit,
+        min_score=min_score,
+    )
+    print(json.dumps({
+        "repo_root": str(repo_root),
+        "repo_key": repo_key,
+        "branch": branch_name,
+        "storage_root": str(storage_root),
+        "branch_dir": str(branch_dir),
+        "mode": "find-candidates",
+        "query_preview": _first_nonempty_line(query)[:_SIM_PREVIEW_LEN],
+        "kind": args.kind,
+        "candidates": candidates,
+        "next_actions": [
+            "同一旧条目需要更新: dev-memory-cli capture rewrite-entry --id <id> --content '<new text>'",
+            "旧条目应移除: dev-memory-cli capture delete-entry --id <id>",
+            "没有对应旧条目: dev-memory-cli capture record --kind <kind> --content '<new text>'",
+        ],
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+def command_list_entries(args):
+    repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
+        args.repo, args.context_dir, args.branch
+    )
+    if args.limit < 1:
+        raise RuntimeError(f"--limit must be >= 1, got {args.limit}")
+    result = list_section_entries(paths, args.kind, limit=args.limit, tail=args.tail)
+    print(json.dumps({
+        "repo_root": str(repo_root),
+        "repo_key": repo_key,
+        "branch": branch_name,
+        "storage_root": str(storage_root),
+        "branch_dir": str(branch_dir),
+        "mode": "list-entries",
+        **result,
+        "next_actions": [
+            "同一旧条目需要更新: dev-memory-cli capture rewrite-entry --id <id> --content '<new text>'",
+            "旧条目应移除: dev-memory-cli capture delete-entry --id <id>",
+            "没有对应旧条目: dev-memory-cli capture record --kind <kind> --content '<new text>'",
+        ],
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def command_record(args):
     repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
         args.repo, args.context_dir, args.branch
@@ -1946,6 +2123,27 @@ def main():
     classify.add_argument("--content", help="Inline content to classify")
     classify.add_argument("--content-file", help="File containing content to classify")
 
+    list_entries = subparsers.add_parser(
+        "list-entries",
+        help="List existing entries in a kind's target section with rewrite/delete ids",
+    )
+    _add_common_args(list_entries)
+    list_entries.add_argument("--kind", required=True, help=f"Kind whose target section should be listed. One of: {', '.join(sorted(KIND_MAP.keys()))}")
+    list_entries.add_argument("--limit", type=int, default=80, help="Maximum number of entries to return")
+    list_entries.add_argument("--tail", action="store_true", help="Return the newest entries instead of the oldest when limited")
+
+    find_candidates = subparsers.add_parser(
+        "find-candidates",
+        help="Find existing entries that a correction should rewrite/delete before appending",
+    )
+    append_kinds = [name for name, spec in sorted(KIND_MAP.items()) if spec.get("default_mode") == "append"]
+    _add_common_args(find_candidates)
+    find_candidates.add_argument("--query", help="Inline text describing the old entry to find")
+    find_candidates.add_argument("--query-file", help="File containing search text")
+    find_candidates.add_argument("--kind", help=f"Restrict search to one append kind. One of: {', '.join(append_kinds)}")
+    find_candidates.add_argument("--limit", type=int, default=8, help="Maximum number of candidates to return")
+    find_candidates.add_argument("--min-score", type=float, default=0.2, help="Minimum fuzzy score in [0.0, 1.0]")
+
     record = subparsers.add_parser("record", help="Write content into one or more sections")
     _add_common_args(record)
     record.add_argument("--kind", help=f"Explicit kind. One of: {', '.join(sorted(KIND_MAP.keys()))}")
@@ -2012,6 +2210,8 @@ def main():
             "show": command_show,
             "suggest-kind": command_suggest_kind,
             "classify": command_classify,
+            "list-entries": command_list_entries,
+            "find-candidates": command_find_candidates,
             "record": command_record,
             "rewrite-entry": command_rewrite_entry,
             "delete-entry": command_delete_entry,

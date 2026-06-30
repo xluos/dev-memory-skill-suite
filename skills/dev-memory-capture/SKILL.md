@@ -13,6 +13,7 @@ Capture 是 dev-memory 套件里**唯一的写入入口**。不管是 checkpoint
 - **三种写入模式**：显式 `--kind`、自动分类（heuristic）、batch session payload。脚本内部统一路由。
 - **自动跨分支打标**：如果内容看起来跨分支可复用（不含分支特有名词 + 有"经验/模式/最佳实践"类信号），会同时追加到 `pending-promotion.md`，给后续 graduate 预筛。
 - **写入前 dedup check**：append 类 kind（decision / risk / glossary / source / shared-* / unsorted / pending）写入前自动对目标 section 做相似度查重。命中疑似重复时**拦下不写**、退出码 2、stdout 返回 `dedup_hint`（含相似候选 + 推荐 action），agent 看完决定 `rewrite-entry` / `--force` / 不调。这是阻止"6 天累积出 3 套互相矛盾决策"的最后一道防线。
+- **纠错前置读取**：用户纠正旧记忆、指出前面记错、说某条不再适用时，先用 `list-entries` 读取目标文件 section 的现有 entry，再 `rewrite-entry` / `delete-entry`。不要依赖精确/模糊匹配先猜哪条，也不要 append 一条"修正说明"把错误和正确内容同时留在记忆里。
 
 ## Announce at start —— 必须是陈述句
 
@@ -63,6 +64,7 @@ Capture 是 dev-memory 套件里**唯一的写入入口**。不管是 checkpoint
 - "刚才说的改了" / "那个结论过时了" / "之前的记忆错了"
 - "用 X 替代 Y"（替换决策）
 - "这条不再适用" / "把这条删掉重写"
+- "前面那条有问题" / "不是这么记的" / "这会导致记忆混乱"
 
 **自动触发（不需要用户说话）：**
 
@@ -76,7 +78,7 @@ Capture 是 dev-memory 套件里**唯一的写入入口**。不管是 checkpoint
 这一类是 dev-memory 的最大收益点 —— 不现在记，下一个 agent（或下一次的你）就会重新走同一条弯路、被同一个用户纠正同一件事。识别信号：
 
 - **试错收敛型**：本轮经过多轮尝试才拿到可用答案。除了最终结论（→ `decision`），把**走过的弯路**单独记 `risk`（"以为 X 能行，结果 Y 失败，最终改 Z"）。不记，下次 dead-end 会被完整重走一遍 —— 这正是 capture 存在的理由。
-- **用户反对 / 纠正 agent 做法**：agent 做了或提议了 X，用户说 "不对，改 Y" / "别这样做" / "这里不能这么用" —— 用户的反向意见本身就是决策（→ `decision`，reason 直接引用用户的原话或原意）。如果纠正听上去是一般性规则（不局限于本次场景），升格为 `shared-decision`。
+- **用户反对 / 纠正 agent 做法**：agent 做了或提议了 X，用户说 "不对，改 Y" / "别这样做" / "这里不能这么用" —— 先判断是否是在纠正已有记忆。若是，走下方"Rewrite-first 纠错流程"，改写/删除旧 entry；只有找不到对应旧 entry 时，才把用户的反向意见作为新决策写入（→ `decision`）。如果纠正听上去是一般性规则（不局限于本次场景），升格为 `shared-decision`。
 - **用户声明偏好/禁令**：用户说 "以后 X 都用 Y" / "不要用 Z" / "这个仓库一律走 W" —— 最典型的跨分支规则，直接走 `shared-decision` 写 repo/decisions.md，不要落在分支层（分支结束就丢了）。
 - **认知修正 / gotcha**：本轮出现"原以为 X，实际 Y"的反直觉发现，即便用户没说"记一下"，也算 `risk`。
 
@@ -88,6 +90,38 @@ Capture 是 dev-memory 套件里**唯一的写入入口**。不管是 checkpoint
 - 纯上下文澄清、一次性问答（"这是什么"类问题）
 - 用户在快速试错中，结论还在反复变（等收敛后再一次性 capture 试错过程 + 最终结论，参见上方"试错收敛型"）
 - SessionStart 注入的内容已经覆盖本轮产出，没有新增（避免重复写）
+
+## Rewrite-first 纠错流程（**必读**）
+
+用户指出旧内容错了、前面思路有问题、某条记忆不再适用时，默认不是"再补一条修正"，而是**先改旧 entry**。同一主题里同时保留错误条目和更正条目，会让下一个 agent 同时读到互相冲突的事实，这是 capture 的高危失败模式。
+
+**强制流程：**
+
+1. 先判断这类记忆大概率落在哪个 kind，然后直接读取该 kind 对应文件 section 的现有 entries：
+   ```bash
+   npx dev-memory-cli capture list-entries \
+     --repo <repo-path> \
+     --kind decision \
+     --limit 120
+   ```
+   常见映射：决策/规则读 `decision` 或 `shared-decision`；风险/坑读 `risk`；术语/上下文读 `glossary` 或 `shared-context`。不确定 kind 时先用 `classify` / `suggest-kind` 判断，再读对应 section；不要直接靠关键词匹配决定旧条目。
+
+2. 读 `entries[]` 的 `full_text`：
+   - 明确是同一条旧记忆 → `rewrite-entry --id <id> --content "<正确的新条目>"`
+   - 旧条目应彻底失效且不需要替代 → `delete-entry --id <id>`
+   - 多个候选都相关 → 逐条 rewrite/delete；不要只改最新一条
+   - 找不到对应旧条目 → 才允许 `record` 写新条目
+   - section 很长时，可加 `--tail` 先看最新条目；仍不确定再读更大 `--limit`
+
+3. 新内容应写成最终事实，不要写成"上一条是错的，修正为..."这种依赖历史的描述。例：
+   - ✅ `结论: capture 遇到用户纠正旧记忆时先 list-entries 读取目标 section，基于真实 entry 内容选择 rewrite-entry/delete-entry；找不到旧条目才 append。`
+   - ❌ `修正: 之前说 capture 可以追加修正说明是不对的。`
+
+**禁止：**
+
+- 用户已经指出旧内容错了，还直接 `record --kind decision --content "修正: ..."`。
+- 先 append 修正条目，再期待 tidy 以后清理旧错误。tidy 是兜底清理，不是纠错主路径。
+- 只因为精确匹配 / fuzzy 匹配没找到，就认为可以 append。纠错场景必须先读目标 section 的现有 entries。
 
 ## 三种写入模式
 
@@ -171,6 +205,8 @@ payload 字段 → kind 的映射内置在脚本里，不需要用户关心。
 | `classify` | 同 suggest-kind，但会基于真实的 setup 状态判断 |
 | `sync-working-tree` | 刷新 progress.md 的自动同步区（git 改动概览） |
 | `record-head` | 只更新 manifest 里的 last_seen_head |
+| `list-entries` | 读取某个 kind 对应 section 的现有 entries，纠错时优先用它选旧条目 |
+| `find-candidates` | fuzzy 搜索现有 append 型 entry；只作辅助缩小范围，不作为纠错主路径 |
 | `rewrite-entry` | 按 entry id 改写已有 entry（dedup_hint 推荐 update_existing 时用这个，不要 record --force） |
 
 ## Dedup hint 处理流程（**必读**）
