@@ -11,7 +11,7 @@ Tools like agentara host an LLM session whose cwd is a "workspace" directory con
 - Multi-repo memory in one session (read + write)
 - Zero impact on existing single-repo usage (purely additive)
 - Codex + Claude equal-citizen support (both runners' lifecycle hooks work)
-- Optional "primary repo" focus hint via env var to keep session-start context lean
+- Optional "primary repo" focus hint via workspace-local config or env var to keep session-start context lean
 
 ## Non-Goals
 
@@ -54,12 +54,17 @@ def get_all_branch_paths(cwd: Path | None = None) -> list[BranchPaths]:
 
 ## Primary repo hint
 
-Env vars consulted by hook scripts:
+Primary repo sources, in priority order:
 
-- `DEV_ASSETS_PRIMARY_REPO` — directory **basename** of focus repo (e.g. `myproject`, not absolute path). Matches the basename of one entry in `list_repos_in_workspace()`.
-- `DEV_ASSETS_PRIMARY_BRANCH` — branch name. Informational only; actual branch is read from `git` per repo.
+- `DEV_MEMORY_PRIMARY_REPO` / `DEV_ASSETS_PRIMARY_REPO` — one-off process env override. Value is the directory **basename** of the focus repo (e.g. `myproject`, not absolute path).
+- `<workspace>/.dev-memory-workspace.json` — workspace-local persistent config:
+  ```json
+  {
+    "primary_repo": "myproject"
+  }
+  ```
 
-If env unset in workspace mode: no primary, all repos treated equally (verbose injection).
+Use `dev-memory-cli workspace primary <repo-basename>` from the workspace root to write the local config. If neither source is set, a single-repo workspace treats that repo as primary; a multi-repo workspace treats every repo as brief.
 
 ## Hook Behavior
 
@@ -76,10 +81,12 @@ New shape:
 
 ```python
 if detect_workspace_mode():
-    primary = os.environ.get("DEV_ASSETS_PRIMARY_REPO")
+    primary = primary_repo_name()
+    repos = list_repos_in_workspace()
+    only_one_repo = len(repos) == 1
     sections = []
-    for repo_path in list_repos_in_workspace():
-        is_primary = (primary is None) or (repo_path.name == primary)
+    for repo_path in repos:
+        is_primary = (repo_path.name == primary) or (primary is None and only_one_repo)
         sections.append(build_context_for_repo(repo_path, full=is_primary))
     emit("\n\n---\n\n".join(sections))
 else:
@@ -121,7 +128,7 @@ Add optional `--repo <basename>` flag:
 - Single-repo mode: ignored (or warn if specified)
 - Workspace mode + `--repo` set: write to that repo's branch dir
 - Workspace mode + `--repo` unset:
-  - If `DEV_ASSETS_PRIMARY_REPO` set → write to primary
+  - If env/workspace-local primary is set → write to primary
   - Else → error: `"workspace mode: --repo required when no primary"`
 
 `SKILL.md` updated: in workspace mode, the LLM should pass `--repo <basename>` to disambiguate. Default-to-primary is the convenience path.
@@ -156,10 +163,11 @@ Workspace mode does not change storage. Keying remains `(repo_identity_from_orig
 
 ## Configuration
 
-No new config files. Behavior is fully controlled by:
+Workspace behavior is controlled by:
 
 - Whether cwd is a git repo (auto-detected)
-- `DEV_ASSETS_PRIMARY_REPO` / `DEV_ASSETS_PRIMARY_BRANCH` env vars (optional, hint only)
+- `<workspace>/.dev-memory-workspace.json` with `primary_repo` for persistent per-workspace focus
+- `DEV_MEMORY_PRIMARY_REPO` / `DEV_ASSETS_PRIMARY_REPO` env vars for temporary override
 - Existing `DEV_ASSETS_ROOT` env var or git config `dev-memory.root` (storage location, unchanged)
 
 ## Codex Compatibility

@@ -41,6 +41,7 @@ CONTEXT_SCRIPT = PACKAGE_ROOT / "lib" / "dev_memory_context.py"
 CAPTURE_SCRIPT = PACKAGE_ROOT / "lib" / "dev_memory_capture.py"
 SUMMARY_WORKER_SCRIPT = PACKAGE_ROOT / "scripts" / "hooks" / "session_summary_worker.py"
 DEFAULT_CONFIG_PATH = Path(os.environ.get("DEV_MEMORY_CONFIG_PATH", "~/.dev-memory/config.json")).expanduser()
+WORKSPACE_CONFIG_NAMES = (".dev-memory-workspace.json", ".dev-assets-workspace.json")
 
 
 def run_python(script_path, *args, cwd=None):
@@ -153,12 +154,30 @@ def list_workspace_repos():
 
 
 def primary_repo_name():
-    """Basename of the focus repo from env; None if unset."""
+    """Basename of the focus repo. Env is a one-off override; otherwise use
+    workspace-local config so different model workspaces can choose different
+    primary repos under the same global hook install.
+    """
     value = (
         os.environ.get("DEV_MEMORY_PRIMARY_REPO", "").strip()
         or os.environ.get("DEV_ASSETS_PRIMARY_REPO", "").strip()
     )
-    return value or None
+    if value:
+        return value
+    for name in WORKSPACE_CONFIG_NAMES:
+        config_path = REPO_ROOT / name
+        try:
+            if not config_path.exists():
+                continue
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            configured = data.get("primary_repo") or data.get("primaryRepo")
+            if isinstance(configured, str) and configured.strip():
+                return configured.strip()
+        except Exception as exc:
+            log(f"[dev-memory] workspace config ignored ({config_path}): {exc}")
+    return None
 
 
 def strip_managed_markers(text):
@@ -356,12 +375,6 @@ _FULL_SECTION_KEYS = (
     ("risks", "后续继续前要注意"),
 )
 
-_BRIEF_SECTION_KEYS = (
-    ("overview", "当前目标"),
-    ("glossary", "当前有效上下文"),
-)
-
-
 _RECENT_FIRST_SECTIONS = {
     ("decisions", "关键决策与原因"),
     ("risks", "阻塞与注意点"),
@@ -398,6 +411,37 @@ _HIGH_PRIORITY_WRAPPERS = {
 _REPO_MAX_LINES = 32
 _REPO_MAX_CHARS = 3000
 
+_BRIEF_PROFILES = {
+    "expanded": {
+        ("progress", "功能文件索引"): (128, 12000, False),
+        ("progress", "建议优先查看的目录"): (128, 12000, False),
+        ("repo_decisions", None): (32, 3000, True),
+        ("repo_glossary", None): (32, 3000, True),
+    },
+    "standard": {
+        ("progress", "功能文件索引"): (16, 1600, True),
+        ("progress", "建议优先查看的目录"): (8, 800, False),
+        ("repo_decisions", None): (8, 900, True),
+        ("repo_glossary", None): (8, 900, True),
+    },
+    "minimal": {
+        ("progress", "功能文件索引"): (5, 600, True),
+        ("progress", "建议优先查看的目录"): (5, 600, False),
+    },
+}
+
+
+def brief_profile_for_repo_count(repo_count):
+    if repo_count <= 2:
+        return "expanded"
+    if repo_count <= 5:
+        return "standard"
+    return "minimal"
+
+
+def _brief_section_keys(profile):
+    return tuple(_BRIEF_PROFILES.get(profile, _BRIEF_PROFILES["standard"]).keys())
+
 
 def _extract_sections(paths, keys):
     out = []
@@ -413,7 +457,7 @@ def _extract_sections(paths, keys):
     return out
 
 
-def _build_context_from_assets(assets, *, full=True, heading=None):
+def _build_context_from_assets(assets, *, full=True, heading=None, brief_profile="standard"):
     if not assets["branch_dir"].exists():
         # v2: capture lazy-inits on first write, so branch_dir typically
         # exists after any real interaction. Missing here just means no
@@ -426,9 +470,10 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
         return None
 
     paths = assets["paths"]
-    keys = _FULL_SECTION_KEYS if full else _BRIEF_SECTION_KEYS
+    keys = _FULL_SECTION_KEYS if full else _brief_section_keys(brief_profile)
     sections = _extract_sections(paths, keys)
     max_lines, max_chars = (8, 700) if full else (3, 200)
+    brief_limits = _BRIEF_PROFILES.get(brief_profile, _BRIEF_PROFILES["standard"])
 
     parts = []
     no_git = assets.get("branch_name") is None
@@ -447,13 +492,18 @@ def _build_context_from_assets(assets, *, full=True, heading=None):
     for title, body, file_key, source_title, wrapper in sections:
         if not body:
             continue
-        if full and file_key in _REPO_LEVEL_KEYS:
+        if not full and (file_key, source_title) in brief_limits:
+            eff_lines, eff_chars, prefer_recent = brief_limits[(file_key, source_title)]
+        elif full and file_key in _REPO_LEVEL_KEYS:
             eff_lines, eff_chars = _REPO_MAX_LINES, _REPO_MAX_CHARS
+            prefer_recent = (file_key, source_title) in _RECENT_FIRST_SECTIONS
         elif full and (file_key, source_title) in _BRANCH_REFERENCE_SECTIONS:
             eff_lines, eff_chars = _BRANCH_REF_MAX_LINES, _BRANCH_REF_MAX_CHARS
+            prefer_recent = (file_key, source_title) in _RECENT_FIRST_SECTIONS
         else:
             eff_lines, eff_chars = max_lines, max_chars
-        if (file_key, source_title) in _RECENT_FIRST_SECTIONS:
+            prefer_recent = (file_key, source_title) in _RECENT_FIRST_SECTIONS
+        if prefer_recent:
             compacted, truncated = compact_recent_body(body, max_lines=eff_lines, max_chars=eff_chars)
         else:
             compacted, truncated = compact_body(body, max_lines=eff_lines, max_chars=eff_chars)
@@ -554,7 +604,7 @@ def build_session_start_context():
     return _build_context_from_assets(assets, full=True)
 
 
-def build_context_for_repo(repo_path, *, full=True, is_primary=False):
+def build_context_for_repo(repo_path, *, full=True, is_primary=False, brief_profile="standard"):
     """Build a per-repo context block for workspace-mode SessionStart injection.
     Returns None when the repo has no initialized branch memory or resolution fails.
     """
@@ -571,14 +621,15 @@ def build_context_for_repo(repo_path, *, full=True, is_primary=False):
     heading = (
         f"## {tag}`{Path(repo_path).name}` @ branch `{assets['branch_name']}`"
     )
-    return _build_context_from_assets(assets, full=full, heading=heading)
+    return _build_context_from_assets(assets, full=full, heading=heading, brief_profile=brief_profile)
 
 
 def build_workspace_start_context():
     """SessionStart context for workspace mode. Primary repo gets full memory;
-    others get a brief overview only. Returns None if no initialized repos.
+    others get a dynamically compacted brief context. Returns None if no
+    initialized repos.
 
-    Fallback when DEV_MEMORY_PRIMARY_REPO is unset:
+    Fallback when no env/workspace-local primary is set:
       - Single-repo workspace → that repo is full (user's intent is obvious).
       - Multi-repo workspace  → all brief, so N full dumps can't drown the
         session. Header tells the agent how to promote one to full.
@@ -588,6 +639,7 @@ def build_workspace_start_context():
         return None
     primary = primary_repo_name()
     only_one_repo = len(repos) == 1
+    brief_profile = brief_profile_for_repo_count(len(repos))
     primary_hit = False
     has_brief = False
     sections = []
@@ -600,7 +652,12 @@ def build_workspace_start_context():
             primary_hit = True
         else:
             has_brief = True
-        ctx = build_context_for_repo(repo_path, full=is_primary, is_primary=is_primary)
+        ctx = build_context_for_repo(
+            repo_path,
+            full=is_primary,
+            is_primary=is_primary,
+            brief_profile=brief_profile,
+        )
         if ctx:
             sections.append(ctx)
     if not sections:
@@ -613,7 +670,7 @@ def build_workspace_start_context():
         header_parts.append(f"Primary 仓库：`{primary}` ({status})")
     if has_brief:
         header_parts.append(
-            "_其它仓库按 brief 摘要注入；每个 brief 末尾列出该仓库的完整记忆文件路径，"
+            f"_其它仓库按 brief/{brief_profile} 摘要注入；每个 brief 末尾列出该仓库的完整记忆文件路径，"
             "聚焦时直接 Read 即可（如需 CLI：`dev-memory-cli context show --repo <name>`）。_"
         )
     header = "\n".join(header_parts)

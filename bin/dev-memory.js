@@ -8,6 +8,7 @@ const os = require("node:os");
 const PACKAGE_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_STORAGE_ROOT = path.join(os.homedir(), ".dev-memory", "repos");
 const DEFAULT_CONFIG_PATH = process.env.DEV_MEMORY_CONFIG_PATH || path.join(os.homedir(), ".dev-memory", "config.json");
+const WORKSPACE_CONFIG_NAME = ".dev-memory-workspace.json";
 
 function fail(message) {
   process.stderr.write(`ERROR: ${message}\n`);
@@ -279,6 +280,74 @@ function commandUi(_positional, options) {
   const openBrowserFlag = !options["no-open"];
   const readOnly = !!options["read-only"];
   start({ host, port, openBrowserFlag, readOnly });
+}
+
+function listWorkspaceRepos(workspaceRoot) {
+  if (!fs.existsSync(workspaceRoot) || !fs.statSync(workspaceRoot).isDirectory()) {
+    return [];
+  }
+  return fs.readdirSync(workspaceRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(workspaceRoot, entry.name))
+    .filter((entryPath) => fs.existsSync(path.join(entryPath, ".git")))
+    .sort((a, b) => path.basename(a).localeCompare(path.basename(b)));
+}
+
+function readWorkspaceConfig(workspaceRoot) {
+  const configPath = path.join(workspaceRoot, WORKSPACE_CONFIG_NAME);
+  if (!fs.existsSync(configPath)) return {};
+  const data = loadJson(configPath);
+  return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+}
+
+function commandWorkspace(rawArgs) {
+  const sub = rawArgs[0];
+  const { positional, options } = parseArgs(rawArgs.slice(1));
+  const workspaceRoot = path.resolve(options.workspace || options.repo || process.cwd());
+  const repos = listWorkspaceRepos(workspaceRoot);
+  const repoNames = repos.map((repoPath) => path.basename(repoPath));
+
+  if (!sub || sub === "--help" || sub === "-h") {
+    process.stdout.write(`Usage:
+  dev-memory-cli workspace show [--workspace PATH]
+  dev-memory-cli workspace primary <repo-basename> [--workspace PATH]
+`);
+    return;
+  }
+
+  if (sub === "show") {
+    const config = readWorkspaceConfig(workspaceRoot);
+    process.stdout.write(`${JSON.stringify({
+      workspace: workspaceRoot,
+      config_path: path.join(workspaceRoot, WORKSPACE_CONFIG_NAME),
+      primary_repo: config.primary_repo || null,
+      repos: repoNames,
+    }, null, 2)}\n`);
+    return;
+  }
+
+  if (sub === "primary") {
+    const primary = positional[0];
+    if (!primary || primary === true) {
+      fail("workspace primary requires a repo basename");
+    }
+    if (!repoNames.includes(primary)) {
+      fail(`repo '${primary}' not found under ${workspaceRoot}. Available: ${repoNames.join(", ") || "(none)"}`);
+    }
+    const configPath = path.join(workspaceRoot, WORKSPACE_CONFIG_NAME);
+    const config = readWorkspaceConfig(workspaceRoot);
+    config.primary_repo = primary;
+    config.updated_at = new Date().toISOString();
+    writeJson(configPath, config);
+    process.stdout.write(`${JSON.stringify({
+      workspace: workspaceRoot,
+      config_path: configPath,
+      primary_repo: primary,
+    }, null, 2)}\n`);
+    return;
+  }
+
+  fail(`unknown workspace command: ${sub}`);
 }
 
 // Subcommands that delegate straight to the Python lib/ scripts.
@@ -617,6 +686,7 @@ function printHelp() {
   dev-memory-cli install-hooks <codex|claude> [--repo PATH] [--global]
   dev-memory-cli install-hooks --all [--repo PATH] [--global]
   dev-memory-cli ui [--port N] [--host HOST] [--no-open] [--read-only]
+  dev-memory-cli workspace <show|primary> [...]
   dev-memory-cli read <show|search> [...]
   dev-memory-cli context <show|...> [...]
   dev-memory-cli capture <record|show|sync-working-tree|record-head|suggest-kind|classify> [...]
@@ -660,6 +730,10 @@ function main() {
   }
   if (command === "ui") {
     commandUi(positional, options);
+    return;
+  }
+  if (command === "workspace") {
+    commandWorkspace(argv.slice(1));
     return;
   }
   fail(`unknown command: ${command}`);
