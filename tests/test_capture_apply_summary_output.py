@@ -174,3 +174,33 @@ def test_apply_summary_output_prunes_repo_shared_sections(seed_branch_files):
     assert "旧共享规则 4" not in repo_decisions
     assert "旧共享规则 5" in repo_decisions
     assert "旧共享规则 24" in repo_decisions
+
+
+def test_apply_summary_output_prunes_after_rewrite_ids_are_applied(seed_branch_files):
+    entries = "\n\n".join(f"- decision {idx}" for idx in range(200))
+    branch = seed_branch_files({
+        "decisions": (
+            "# 分支决策\n\n"
+            "## 分支\n\n- test-branch\n\n"
+            "## 关键决策与原因\n\n"
+            f"{entries}\n"
+        ),
+    })
+    payload = {
+        "appends": [{"kind": "decision", "content": "newest decision"}],
+        "rewrites": [{
+            "id": "decisions::1::199",
+            "content": "rewritten decision 199",
+            "reason": "new evidence",
+        }],
+    }
+
+    code, out = _run_apply(branch, payload)
+
+    assert code == 0
+    body = branch["paths"]["decisions"].read_text(encoding="utf-8")
+    entry_lines = [line for line in body.splitlines() if line.startswith("- ")]
+    assert "- decision 0" not in entry_lines
+    assert "rewritten decision 199" in body
+    assert "newest decision" in body
+    assert any(action["op"] == "prune-memory" for action in out["actions"])

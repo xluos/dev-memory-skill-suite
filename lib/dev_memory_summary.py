@@ -68,16 +68,26 @@ def _extract_codex(obj):
     }
 
 
-def _iter_core_messages(transcript_path):
+def _iter_core_messages(transcript_path, since_size=0):
     if not transcript_path:
         return []
     path = Path(transcript_path).expanduser()
     if not path.exists():
         return []
     out = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+    with path.open("rb") as f:
+        while True:
+            start = f.tell()
+            raw = f.readline()
+            if not raw:
+                break
+            end = f.tell()
+            if end <= since_size:
+                continue
+            try:
+                line = raw.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                continue
             if not line:
                 continue
             try:
@@ -86,12 +96,16 @@ def _iter_core_messages(transcript_path):
                 continue
             msg = _extract_claude(obj) or _extract_codex(obj)
             if msg:
+                msg["start_offset"] = start
+                msg["end_offset"] = end
                 out.append(msg)
     return out
 
 
 def _truncate(text, max_chars):
     text = (text or "").strip()
+    if not max_chars or max_chars < 0:
+        return text
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 3].rstrip() + "..."
@@ -142,8 +156,8 @@ def _summary_job(job):
 def extract_core_payload(
     job,
     *,
-    max_messages=40,
-    max_message_chars=2000,
+    max_messages=0,
+    max_message_chars=0,
     max_memory_chars=6000,
     since_size=0,
     include_message_metadata=False,
@@ -159,14 +173,9 @@ def extract_core_payload(
         ("repo/decisions.md", repo_dir / "repo" / "decisions.md"),
         ("repo/glossary.md", repo_dir / "repo" / "glossary.md"),
     ]
-    messages = _iter_core_messages(job.get("transcript_path"))
-    if since_size:
-        # JSONL is line-oriented but byte offsets can land mid-line. Keep this
-        # option conservative for now: expose cursor metadata and let workers
-        # use recent-tail until a precise offset reader is needed.
-        pass
+    messages = _iter_core_messages(job.get("transcript_path"), since_size=since_size)
     messages = [m for m in messages if not _is_nonsemantic_user_text(m["text"])]
-    recent = messages[-max_messages:]
+    recent = messages[-max_messages:] if max_messages and max_messages > 0 else messages
     core_messages = []
     for m in recent:
         item = {
@@ -213,10 +222,10 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("extract-core", help="Extract core transcript messages and current memory for a summary job")
     p.add_argument("job", help="Path to a session-summary pending job JSON")
-    p.add_argument("--max-messages", type=int, default=40)
-    p.add_argument("--max-message-chars", type=int, default=2000)
+    p.add_argument("--max-messages", type=int, default=0, help="0 keeps every semantic message")
+    p.add_argument("--max-message-chars", type=int, default=0, help="0 keeps complete message text")
     p.add_argument("--max-memory-chars", type=int, default=6000)
-    p.add_argument("--since-size", type=int, default=0, help="Reserved cursor hint for future byte-offset extraction")
+    p.add_argument("--since-size", type=int, default=0, help="Read JSONL records ending after this byte offset")
     p.add_argument(
         "--include-message-metadata",
         action="store_true",

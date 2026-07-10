@@ -37,6 +37,7 @@ from dev_memory_common import (
     get_setup_completed,
     is_cross_branch_candidate,
     join_sections,
+    limit_markdown_entries,
     list_missing_docs,
     merged_focus_areas,
     now_iso,
@@ -101,7 +102,7 @@ def _emit_capture_log(paths, *, action, kind_label, summary, touched, extra_deta
         )
 
 
-def _append_with_separator(path, title, body):
+def _append_with_separator(path, title, body, *, enforce_limit=True, max_entries=None):
     """Like append_to_section but always inserts a blank line between the
     existing section body and the new entry. Drops placeholder-only bodies
     instead of padding them with a blank line.
@@ -112,6 +113,7 @@ def _append_with_separator(path, title, body):
     matched = False
     updated = []
     body_stripped = body.strip()
+    pruned = 0
 
     def _is_placeholder_only(text):
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -125,13 +127,21 @@ def _append_with_separator(path, title, body):
                 combined = body_stripped
             else:
                 combined = existing_body.rstrip() + "\n\n" + body_stripped
+            if enforce_limit:
+                combined, pruned = limit_markdown_entries(combined, max_entries=max_entries)
             updated.append((existing_title, combined))
             matched = True
         else:
             updated.append((existing_title, existing_body))
     if not matched:
-        updated.append((title, body_stripped))
+        bounded, pruned = (
+            limit_markdown_entries(body_stripped, max_entries=max_entries)
+            if enforce_limit
+            else (body_stripped, 0)
+        )
+        updated.append((title, bounded))
     path.write_text(join_sections(prefix, updated), encoding="utf-8")
+    return pruned
 
 
 # ---------------------------------------------------------------------------
@@ -1125,6 +1135,43 @@ def prune_repo_shared_memory(paths, *, max_entries=None, max_entry_chars=None):
     return touched
 
 
+def prune_bounded_memory(paths, *, max_entries=None):
+    """Apply the general semantic-entry cap after a multi-operation summary."""
+    max_entries = _int_env("DEV_MEMORY_MAX_ENTRIES", 200) if max_entries is None else max_entries
+    targets = {
+        (spec["file"], spec["section"])
+        for spec in KIND_MAP.values()
+        if spec.get("default_mode") == "append"
+    }
+    touched = []
+    for file_key, section_title in sorted(targets):
+        path = paths.get(file_key)
+        if not path or not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8")
+        prefix, sections = split_sections(content)
+        updated = []
+        changed = False
+        for title, body in sections:
+            if title.strip() != section_title.strip():
+                updated.append((title, body))
+                continue
+            bounded, pruned = limit_markdown_entries(body, max_entries=max_entries)
+            updated.append((title, bounded))
+            if pruned:
+                changed = True
+                touched.append({
+                    "file": _label(file_key),
+                    "section": title,
+                    "mode": "prune",
+                    "pruned": pruned,
+                    "max_entries": max_entries,
+                })
+        if changed:
+            path.write_text(join_sections(prefix, updated), encoding="utf-8")
+    return touched
+
+
 # ---------------------------------------------------------------------------
 # Write primitives
 # ---------------------------------------------------------------------------
@@ -1140,7 +1187,7 @@ def _resolve_target(paths, kind, title_override=None):
     return spec["file"], target_path, section_title
 
 
-def _write_one(paths, kind, body, title_override=None, *, mode_override=None):
+def _write_one(paths, kind, body, title_override=None, *, mode_override=None, enforce_limit=True):
     """Write a body into the kind's target file. Picks append vs upsert from
     KIND_MAP[kind].default_mode unless overridden. progress.md uses a
     dedicated upsert that preserves the auto-sync marker.
@@ -1159,13 +1206,28 @@ def _write_one(paths, kind, body, title_override=None, *, mode_override=None):
         body_to_write = body.strip()
         if not body_to_write.startswith(("- ", "* ", "#")):
             body_to_write = "- " + body_to_write
-        _append_with_separator(target_path, section_title, body_to_write)
+        entry_limit = (
+            _REPO_SHARED_MAX_ENTRIES
+            if file_key in {"repo_decisions", "repo_glossary"}
+            else _int_env("DEV_MEMORY_MAX_ENTRIES", 200)
+        )
+        pruned = _append_with_separator(
+            target_path,
+            section_title,
+            body_to_write,
+            enforce_limit=enforce_limit,
+            max_entries=entry_limit,
+        )
     else:
         if file_key == "progress":
             upsert_progress_section(target_path, section_title, body)
         else:
             upsert_markdown_section(target_path, section_title, body)
-    return {"file": _label(file_key), "section": section_title, "mode": mode}
+    result = {"file": _label(file_key), "section": section_title, "mode": mode}
+    if mode == "append" and pruned:
+        result["pruned"] = pruned
+        result["max_entries"] = entry_limit
+    return result
 
 
 def _label(file_key):
@@ -1819,7 +1881,13 @@ def command_apply_summary_output(args):
                     "dedup_hint": hint,
                 })
                 return
-        rec = _write_one(paths, kind, body, mode_override=mode_override)
+        rec = _write_one(
+            paths,
+            kind,
+            body,
+            mode_override=mode_override,
+            enforce_limit=False,
+        )
         touched.append(rec)
         _maybe_worktree_writeback(
             worktree_writeback,
@@ -1893,6 +1961,12 @@ def command_apply_summary_output(args):
             "deleted_first_line": mutation["previous_first_line"],
             "reason": item.get("reason"),
         })
+
+    bounded = prune_bounded_memory(paths)
+    if bounded:
+        touched.extend(bounded)
+        for rec in bounded:
+            actions.append({"op": "prune-memory", **rec})
 
     pruned = prune_repo_shared_memory(paths)
     if pruned:
@@ -2115,7 +2189,11 @@ def main():
     suggest = subparsers.add_parser("suggest-kind", help="Dry-run classify a content string")
     suggest.add_argument("--content", help="Inline content to classify")
     suggest.add_argument("--content-file", help="File containing content to classify")
-    suggest.add_argument("--already-setup", action="store_true", help="Hint that setup is completed (shifts default from unsorted to progress)")
+    suggest.add_argument(
+        "--already-setup",
+        action="store_true",
+        help="Accepted for compatibility; ambiguous content remains unsorted",
+    )
     suggest.add_argument("--branch-name", help="Branch name for cross-branch candidate check")
 
     classify = subparsers.add_parser("classify", help="Classify content against the current branch context")

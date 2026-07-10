@@ -123,7 +123,7 @@ def _apply_entries(target_path, entries):
         if not section:
             raise ValueError(f"harvest entry missing 'section': {entry}")
         if mode == "append":
-            append_to_section(target_path, section, body)
+            append_to_section(target_path, section, body, max_entries=20)
         elif mode == "replace":
             upsert_markdown_section(target_path, section, body)
         else:

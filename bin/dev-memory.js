@@ -56,7 +56,11 @@ function runPython(scriptPath, args, cwd = process.cwd(), extraEnv = {}) {
   // inject DEFAULT_STORAGE_ROOT here — that would short-circuit Python's
   // fallback chain (which prefers legacy ~/.dev-assets if it has data and
   // ~/.dev-memory does not).
-  const env = { ...process.env, ...extraEnv };
+  const env = {
+    ...process.env,
+    DEV_MEMORY_CLI_PATH: process.env.DEV_MEMORY_CLI_PATH || path.resolve(process.argv[1]),
+    ...extraEnv,
+  };
   const result = spawnSync(python, [scriptPath, ...args], {
     cwd,
     env,
@@ -136,7 +140,7 @@ function detectSessionSummaryCommand() {
   if (commandExists("codex")) {
     return {
       provider: "codex",
-      command: "codex exec --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox danger-full-access {prompt}",
+      command: "codex exec --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox danger-full-access {prompt}",
     };
   }
   if (commandExists("claude")) {
@@ -361,6 +365,7 @@ const PY_SUBCOMMAND_SCRIPTS = {
   graduate: "dev_memory_graduate.py",
   tidy: "dev_memory_tidy.py",
   summary: "dev_memory_summary.py",
+  "session-scan": "dev_memory_session_scan.py",
 };
 
 function commandPySubcommand(name, rawArgs) {
@@ -694,6 +699,7 @@ function printHelp() {
   dev-memory-cli graduate <dry-run|apply|index> [...]
   dev-memory-cli tidy <prepare|apply> [...]
   dev-memory-cli summary <extract-core> [...]
+  dev-memory-cli session-scan <run|install|status|stats|history|show|uninstall|config> [...]
   dev-memory-cli branch [list|inspect|rename|fork|delete|init|inherit-worktree-base] [...]   # no subcommand = interactive
 
 Environment:

@@ -1234,8 +1234,7 @@ def ensure_branch_paths_exist(repo, context_dir=None, branch=None):
 # Heuristic classifier (capture routing)
 # ---------------------------------------------------------------------------
 
-# Order matters: the first pattern that matches wins. Keep decisions/risks
-# ahead of progress since their signals are more specific.
+# Order matters: the first pattern that matches wins.
 _CLASSIFY_PATTERNS = [
     ("decision", re.compile(r"结论[:：]|决[定议][:：]|不再|改为|采用|废弃|选择.+?不选|abandoned|adopt")),
     ("risk", re.compile(r"阻塞|注意|坑|失败|风险|卡住|gotcha|caveat|warning")),
@@ -1244,19 +1243,18 @@ _CLASSIFY_PATTERNS = [
 
 
 def classify_content(text, *, already_setup=False):
-    """Classify free-form content into one of decisions/progress/risks/
-    glossary/unsorted. Used by capture when the caller doesn't pass --kind.
+    """Classify free-form content into decision/risk/glossary/unsorted.
 
-    Before setup, ambiguous content falls to `unsorted` so the user can sort
-    it later via setup merge. After setup, the default shifts to `progress`
-    because the user has signaled they want aggressive categorization.
+    ``already_setup`` is retained for callers that still pass the setup state,
+    but ambiguous content always stays in ``unsorted``. Ephemeral progress is
+    intentionally derived from Git instead of being a semantic capture kind.
     """
     if not text or not text.strip():
         return "unsorted"
     for label, pattern in _CLASSIFY_PATTERNS:
         if pattern.search(text):
             return label
-    return "progress" if already_setup else "unsorted"
+    return "unsorted"
 
 
 # Branch-name tokens that appear in generic technical content too often to
@@ -1774,7 +1772,37 @@ def _section_is_placeholder_only(text):
     return all(any(marker in line for marker in PLACEHOLDER_MARKERS) for line in lines)
 
 
-def append_to_section(path, title, body):
+def memory_max_entries():
+    value = os.environ.get("DEV_MEMORY_MAX_ENTRIES", "200").strip()
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 200
+
+
+def limit_markdown_entries(body, max_entries=None):
+    """Bound an accumulated markdown section while retaining newest entries.
+
+    Accumulation sections are stored oldest-to-newest so entry ids remain
+    stable. Only top-level bullet blocks count as entries; continuation lines
+    stay attached to their bullet.
+    """
+    limit = memory_max_entries() if max_entries is None else max(1, int(max_entries))
+    lines = (body or "").strip().splitlines()
+    starts = [idx for idx, line in enumerate(lines) if re.match(r"^[-*]\s+", line)]
+    if len(starts) <= limit:
+        return (body or "").strip(), 0
+    blocks = []
+    for pos, start in enumerate(starts):
+        end = starts[pos + 1] if pos + 1 < len(starts) else len(lines)
+        blocks.append("\n".join(lines[start:end]).strip())
+    preamble = "\n".join(lines[:starts[0]]).strip()
+    kept = blocks[-limit:]
+    bounded = "\n\n".join(([preamble] if preamble else []) + kept).strip()
+    return bounded, len(blocks) - len(kept)
+
+
+def append_to_section(path, title, body, *, max_entries=None):
     content = path.read_text(encoding="utf-8") if path.exists() else ""
     prefix, sections = split_sections(content)
     target = title.strip()
@@ -1786,12 +1814,14 @@ def append_to_section(path, title, body):
                 combined = body.strip()
             else:
                 combined = (existing_body.rstrip() + "\n" + body.strip()).strip()
+            combined, _pruned = limit_markdown_entries(combined, max_entries=max_entries)
             updated.append((existing_title, combined))
             matched = True
         else:
             updated.append((existing_title, existing_body))
     if not matched:
-        updated.append((title, body.strip()))
+        bounded, _pruned = limit_markdown_entries(body.strip(), max_entries=max_entries)
+        updated.append((title, bounded))
     path.write_text(join_sections(prefix, updated), encoding="utf-8")
 
 

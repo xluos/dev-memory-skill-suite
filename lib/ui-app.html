@@ -75,6 +75,14 @@ button { font-family: inherit; }
 .topbar .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .topbar .title { font-weight: 600; font-size: 15px; }
 .topbar .meta { color: var(--fg-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-tabs { display: flex; gap: 4px; }
+.view-tab { padding: 6px 10px; border: 1px solid var(--border); background: var(--bg-card); color: var(--fg); border-radius: var(--radius-sm); cursor: pointer; }
+.view-tab.active { color: var(--accent-fg); background: var(--accent); border-color: var(--accent); }
+.scan-table { width: 100%; border-collapse: collapse; background: var(--bg-card); border: 1px solid var(--border); font-size: 12px; }
+.scan-table th, .scan-table td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+.scan-table th { color: var(--fg-muted); background: var(--bg); font-weight: 600; }
+.scan-table tr:last-child td { border-bottom: 0; }
+.scan-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .main { display: grid; grid-template-columns: 320px 1fr; overflow: hidden; min-height: 0; }
 
@@ -453,6 +461,10 @@ button.icon-btn:hover {
       <span class="meta" id="meta">加载中…</span>
     </div>
     <div class="actions">
+      <span class="view-tabs">
+        <button class="view-tab active" id="memoryView">记忆</button>
+        <button class="view-tab" id="scanView">会话扫描</button>
+      </span>
       <button class="icon-btn" id="reload" title="重新加载">↻ 刷新</button>
     </div>
   </div>
@@ -490,6 +502,8 @@ button.icon-btn:hover {
 
 var state = {
   tree: null,
+  scan: null,
+  view: "memory",
   selectedRepoKey: null,
   selectedBranch: null,
   fileCache: new Map(),
@@ -670,6 +684,117 @@ function stat(label, value, small) {
     el("div", { class: "label" }, label),
     el("div", { class: "value" + (small ? " sm" : "") }, String(value))
   );
+}
+
+function formatBytes(value) {
+  var n = Number(value || 0);
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+  return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+}
+
+function renderScan() {
+  var data = state.scan;
+  var content = q("#content");
+  var sidebar = q(".sidebar");
+  sidebar.style.display = "none";
+  content.style.gridColumn = "1 / -1";
+  content.innerHTML = "";
+  if (!data || !data.exists) {
+    content.appendChild(el("div", { class: "placeholder" }, "暂无会话扫描记录"));
+    return;
+  }
+  content.appendChild(el("div", { class: "repo-header" }, el("h2", null, "会话扫描"), el("div", { class: "path mono" }, data.scanRoot)));
+  var totals = el("div", { class: "stat-row" });
+  totals.appendChild(stat("扫描运行", data.run_count));
+  totals.appendChild(stat("涉及仓库", data.repos.length));
+  totals.appendChild(stat("总结 Token", data.usage ? (data.usage.total_tokens || 0).toLocaleString() : "未上报"));
+  totals.appendChild(stat("Token 未上报调用", data.unavailable_invocations));
+  content.appendChild(totals);
+
+  content.appendChild(el("h3", { class: "section-title" }, "仓库统计"));
+  var repoTable = el("table", { class: "scan-table" });
+  repoTable.innerHTML = "<thead><tr><th>仓库 / 分支</th><th class='num'>扫描次数</th><th class='num'>会话</th><th class='num'>原始大小</th><th class='num'>新增数据</th><th class='num'>总结 Token</th><th>最近扫描</th></tr></thead>";
+  var repoBody = el("tbody");
+  data.repos.forEach(function (repo) {
+    repoBody.appendChild(el("tr", null,
+      el("td", null, el("div", { class: "mono" }, repo.repo_key), el("div", { class: "sub" }, repo.branches.join(", "))),
+      el("td", { class: "num" }, repo.scan_count),
+      el("td", { class: "num" }, repo.session_count),
+      el("td", { class: "num" }, formatBytes(repo.raw_bytes)),
+      el("td", { class: "num" }, formatBytes(repo.new_bytes)),
+      el("td", { class: "num" }, Number(repo.summary_tokens || 0).toLocaleString()),
+      el("td", null, formatDateTime(repo.last_scanned_at))
+    ));
+  });
+  repoTable.appendChild(repoBody);
+  content.appendChild(repoTable);
+
+  content.appendChild(el("h3", { class: "section-title" }, "最近运行"));
+  var runTable = el("table", { class: "scan-table" });
+  runTable.innerHTML = "<thead><tr><th>时间 / Run ID</th><th>执行器</th><th class='num'>会话</th><th class='num'>新增数据</th><th class='num'>Token</th><th>结果</th></tr></thead>";
+  var runBody = el("tbody");
+  data.runs.forEach(function (run) {
+    var usage = run.summary_usage && run.summary_usage.total_tokens;
+    runBody.appendChild(el("tr", null,
+      el("td", null, el("div", null, formatDateTime(run.started_at)), el("div", { class: "mono" }, run.run_id)),
+      el("td", null, [run.executor || "-", run.model || ""].filter(Boolean).join(" / ")),
+      el("td", { class: "num" }, run.session_count),
+      el("td", { class: "num" }, formatBytes(run.new_bytes)),
+      el("td", { class: "num" }, usage == null ? "未上报" : Number(usage).toLocaleString()),
+      el("td", null, run.done_count + " 完成 · " + run.failed_count + " 失败 · " + run.skipped_count + " 跳过")
+    ));
+  });
+  runTable.appendChild(runBody);
+  content.appendChild(runTable);
+
+  var recentSessions = [];
+  data.runs.forEach(function (run) {
+    (run.sessions || []).forEach(function (session) {
+      recentSessions.push({ run_id: run.run_id, started_at: run.started_at, session: session });
+    });
+  });
+  recentSessions.sort(function (a, b) { return String(b.started_at || "").localeCompare(String(a.started_at || "")); });
+  recentSessions = recentSessions.slice(0, 200);
+  content.appendChild(el("h3", { class: "section-title" }, "最近会话"));
+  var sessionTable = el("table", { class: "scan-table" });
+  sessionTable.innerHTML = "<thead><tr><th>会话 / 仓库</th><th class='num'>原始大小</th><th class='num'>本次新增</th><th class='num'>原会话 Token</th><th class='num'>总结 Token</th><th>状态</th></tr></thead>";
+  var sessionBody = el("tbody");
+  recentSessions.forEach(function (row) {
+    var session = row.session;
+    sessionBody.appendChild(el("tr", null,
+      el("td", null,
+        el("div", { class: "mono" }, session.session_id || "-"),
+        el("div", null, [session.repo_key, session.branch].filter(Boolean).join(" / ")),
+        el("div", { class: "sub mono" }, session.path || "")
+      ),
+      el("td", { class: "num" }, formatBytes(session.raw_size)),
+      el("td", { class: "num" }, formatBytes(session.new_bytes)),
+      el("td", { class: "num" }, session.session_usage && session.session_usage.total_tokens != null ? Number(session.session_usage.total_tokens).toLocaleString() : "未上报"),
+      el("td", { class: "num" }, session.summary_usage && session.summary_usage.total_tokens != null ? Number(session.summary_usage.total_tokens).toLocaleString() : "未上报"),
+      el("td", null, session.status + (session.reason ? " · " + session.reason : ""))
+    ));
+  });
+  sessionTable.appendChild(sessionBody);
+  content.appendChild(sessionTable);
+}
+
+function setView(view) {
+  state.view = view;
+  q("#memoryView").classList.toggle("active", view === "memory");
+  q("#scanView").classList.toggle("active", view === "scan");
+  if (view === "scan") {
+    fetch("/api/session-scan").then(function (r) { return r.json(); }).then(function (data) {
+      state.scan = data;
+      q("#meta").textContent = data.run_count + " 次扫描 · " + data.repos.length + " 个仓库 · " + data.scanRoot;
+      renderScan();
+    }).catch(function (err) { q("#meta").textContent = "错误：" + err.message; });
+  } else {
+    q(".sidebar").style.display = "block";
+    q("#content").style.gridColumn = "";
+    loadTree();
+  }
 }
 
 function renderRepoList(repos, filterText) {
@@ -1068,8 +1193,10 @@ q("#search").addEventListener("input", function (e) {
 });
 q("#reload").addEventListener("click", function () {
   state.fileCache.clear();
-  loadTree();
+  setView(state.view);
 });
+q("#memoryView").addEventListener("click", function () { setView("memory"); });
+q("#scanView").addEventListener("click", function () { setView("scan"); });
 q("#modalClose").addEventListener("click", closeModal);
 q("#modalEdit").addEventListener("click", enterEditMode);
 q("#modalSave").addEventListener("click", saveModalEdit);

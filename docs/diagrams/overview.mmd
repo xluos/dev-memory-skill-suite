@@ -1,37 +1,45 @@
-flowchart TD
-  subgraph CONV["对话流"]
-    SS[SessionStart hook]
-    USER[用户诉求]
-  end
+flowchart TB
+  HOOKS[CLI lifecycle hooks<br/>SessionStart / Stop / SessionEnd]
+  CODEX[Codex CLI / Desktop<br/>rollout JSONL]
+  SCAN[每日全量增量扫描<br/>分块 / token / 审计]
+  USER[交互入口]
 
-  subgraph SUITE["dev-memory 套件（5 skill）"]
-    ROUTER[using-dev-memory<br/>路由]
-    CONTEXT[dev-memory-context<br/>读取 + tiered lookup]
-    CAPTURE[dev-memory-capture<br/>统一写入]
-    SETUP[dev-memory-setup<br/>unsorted 合并 promotion]
-    GRAD[dev-memory-graduate<br/>分支归档]
-  end
+  INJECT[上下文构建与注入]
+  READ[dev-memory-read<br/>定位与搜索]
+  CAPTURE[dev-memory-capture<br/>写入与纠错]
+  SETUP[dev-memory-setup<br/>整理未分类内容]
+  TIDY[dev-memory-tidy<br/>批量校准]
+  GRAD[dev-memory-graduate<br/>上提与归档]
+  CLI[dev-memory-cli<br/>统一执行入口]
 
-  subgraph MEM["~/.dev-memory/repos/"]
-    BRANCH[branches/current<br/>分支层 v2 八件套]
-    SHARED[repo/<br/>共享层]
-    ARCH[branches/_archived<br/>归档层]
-  end
+  REPO[repo/<br/>跨分支共享记忆]
+  BRANCH[branches/&lt;branch&gt;/<br/>分支工作记忆]
+  ARCHIVE[branches/_archived/<br/>已归档分支]
 
-  SS -.SessionStart.-> CONTEXT
-  USER --> ROUTER
-  ROUTER --> CONTEXT
-  ROUTER --> CAPTURE
-  ROUTER --> SETUP
-  ROUTER --> GRAD
+  HOOKS --> INJECT
+  CODEX --> SCAN
+  SCAN --> CLI
+  INJECT --> REPO
+  INJECT --> BRANCH
+  USER --> READ
+  USER --> CAPTURE
+  USER --> SETUP
+  USER --> TIDY
+  USER --> GRAD
+  READ --> CLI
+  CAPTURE --> CLI
+  SETUP --> CLI
+  TIDY --> CLI
+  GRAD --> CLI
+  CLI --> REPO
+  CLI --> BRANCH
+  CLI --> ARCHIVE
 
-  CONTEXT -. 读 .-> BRANCH
-  CONTEXT -. 读 .-> SHARED
-  CAPTURE -. 写 .-> BRANCH
-  SETUP -. 整理 .-> BRANCH
-  GRAD -. 提炼到 .-> SHARED
-  GRAD -. 搬迁到 .-> ARCH
-
-  style SS fill:#e3f2fd
-  style CAPTURE fill:#fff3e0
-  style BRANCH fill:#e8f5e9
+  classDef lifecycle fill:#dbeafe,stroke:#2563eb,color:#172554
+  classDef skill fill:#ffffff,stroke:#64748b,color:#0f172a
+  classDef core fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef storage fill:#dcfce7,stroke:#16a34a,color:#052e16
+  class HOOKS,INJECT lifecycle
+  class USER,READ,CAPTURE,SETUP,TIDY,GRAD skill
+  class CLI core
+  class REPO,BRANCH,ARCHIVE storage

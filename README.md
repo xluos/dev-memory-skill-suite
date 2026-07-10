@@ -1,405 +1,366 @@
 # Dev Memory Skill Suite
 
-面向 Codex、Claude 等 agent 运行时的 **repo + branch 双层开发记忆** 技能套件。
+Dev Memory Skill Suite 为 Codex、Claude 等 coding agent 提供跨会话开发记忆能力。
 
-这套仓库只做一件事：把"开发记忆"从 Git 工作区里拿出来，放到用户目录下，按 `(仓库身份, 分支)` 作为主 key 维护，让跨会话的开发上下文可恢复、可修正、可沉淀、可归档，同时不污染工作区、不和 Git 历史互相干扰。
+开发知识存储在用户目录，并按 **仓库身份 + Git 分支** 隔离。分支层保存当前工作的目标、约束和上下文，repo 层保存跨分支长期有效的规则与资料入口。Git 负责提交与代码历史，dev-memory 负责对后续开发仍有价值的语义信息。
 
-![套件总览](docs/diagrams/overview.png)
+![Dev Memory 工作方式](docs/diagrams/overview.png)
 
-## v2 架构：5 个 Skill + branch CLI
+## 核心能力
 
-v2 把旧的 sync + update 合并成统一的 capture，并把 setup 从前置门禁改为 merge 动作、加 lazy init、加 v1→v2 自动迁移。0.16 起取消 `using-dev-memory` 路由总入口；0.17 起取消旧 `dev-memory-context` 读取 skill；现在补回更窄的 `dev-memory-read` 主动读取入口：它只负责精确定位当前 repo+branch 的权威记忆文件和关键词检索，不做 context 注入，也不写入。当前套件 5 个 skill（1 个读取入口 + 4 个写入 / 流程 / 整理入口）。
+- **会话恢复**：`SessionStart` 自动注入当前 repo + branch 的浓缩记忆和权威文件路径。
+- **语义化写入**：按 decision、risk、glossary、source、overview 等 kind 写入对应文件。
+- **纠错优先**：修正旧记忆时定位并改写原 entry，避免同时保留互相冲突的新旧结论。
+- **分支隔离**：同一仓库的不同分支拥有独立工作记忆，可 fork、rename、reset 或归档。
+- **跨分支共享**：稳定规则进入 repo 层；候选知识可在分支完成时提炼上提。
+- **记忆维护**：支持未分类条目整理、批量校准、备份和归档。
+- **多仓库工作区**：一个 workspace 下可同时加载多个 repo，并为主仓库保留更完整的上下文。
+- **本地管理面板**：浏览、编辑已存储记忆，预览 SessionStart 注入文本，并查看会话扫描与 token 用量。
 
-| Skill | 定位 | 典型触发 |
+## 五个 Skill
+
+| Skill | 职责 | 适用场景 |
 | --- | --- | --- |
-| `dev-memory-read` | **主动读取入口**：定位当前 repo+branch 记忆目录、关键词搜索、返回可直接 Read 的文件路径 | 用户说"重新读一下记忆 / 之前记的 todo / 按记忆最新口径"，或 agent 需要主动查记忆 |
-| `dev-memory-capture` | **统一写入入口**（合并 sync + update） | 本轮产生稳定结论 / checkpoint / 用户手动记一笔 / 改写旧条目 |
-| `dev-memory-setup` | 整理 unsorted.md + 补元信息 + 标 setup_completed（不再是前置门禁） | unsorted.md 累积、用户明确说"整理一下" |
-| `dev-memory-tidy` | **定期校准入口**：已结构化条目漂移时（陈旧 / 重复 / 模板残留），agent 聚合 proposal → 浏览器审 → apply 落盘 + 自动备份 | 用户说"整理一下记忆 / 清下过期的 / 看看哪些还成立" |
-| `dev-memory-graduate` | 分支收尾：从 pending-promotion 提炼上提 + 归档 branch | 用户显式说"归档 / 分支收尾 / merge 完清一下" |
+| `dev-memory-read` | 定位并搜索当前 repo/branch 的权威记忆，只读不写 | 主动恢复既有记忆、查询历史 TODO |
+| `dev-memory-capture` | 写入、改写或删除记忆；同步 Git 派生索引 | 稳定结论沉淀、纠错、阶段 checkpoint |
+| `dev-memory-setup` | 把 `unsorted.md` 中的内容分类合并到结构化文件 | 未分类内容整理、记忆结构初始化 |
+| `dev-memory-tidy` | 批量审查陈旧、重复、错误或模板残留条目，备份后应用 | 结构化记忆校准与清理 |
+| `dev-memory-graduate` | 提炼跨分支知识并归档已完成分支 | 分支收尾与归档 |
 
-> 读取路径：SessionStart hook 自动注入 progress / risks / decisions 等摘要 + 完整文件路径；用户或 agent 主动要求重新查记忆时，走 `dev-memory-read` / `dev-memory-cli read show|search`。`context show` / `context sync` 仍保留给 hook 和脚本场景。
-
-详细设计与语义见：
-
-- [docs/dev-memory-skill-suite-guide.md](docs/dev-memory-skill-suite-guide.md) — 套件整体说明
-- [docs/workspace-mode.md](docs/workspace-mode.md) — 多 repo workspace 模式
-
-### Lazy init 与 setup 的新关系
-
-v2 里 capture 写入永远先 lazy init（骨架不存在就自动建），不再需要前置 setup。setup 的新职责：扫 `unsorted.md` 把未分类条目按用户选择 merge 到 decisions/progress/risks/glossary，再标 `manifest.setup_completed = true`。setup 之前 / 之后的区别是 capture 的 heuristic 兜底策略：之前"不确定 → unsorted"，之后"不确定 → progress"。
-
-### 主动读取：dev-memory-read
-
-`dev-memory-read` 是只读 skill，避免 agent 在错误目录里盲搜。它不 lazy-init，不迁移，不写任何记忆文件。
-
-```bash
-dev-memory-cli read show --repo <repo-path>
-dev-memory-cli read search --repo <repo-path> --query "作者信息" --query "头像"
-```
-
-`read show` 输出 `repo_dir`、`branch_dir`、`recommended_read_order`、`existing_branches`；`read search` 默认只查当前 branch + repo 共享层，需要扩大范围时再显式传 `--scope all-branches` 或 `--scope archived`。这能覆盖“当前分支记忆没命中，但旧分支/归档里可能有之前 TODO”的场景，同时不会扫描整个 `~/.dev-memory`。
-
-### Capture 的写入路由
-
-![capture 写入流程](docs/diagrams/capture.png)
-
-Capture 有三种写入模式：
-
-- **显式 kind**（`--kind decision` 等）：最精准，直接路由到目标文件
-- **自动分类**（`--auto` 或默认）：走 `classify_content` 正则 heuristic，根据关键词落到 decision / risk / glossary / progress / unsorted
-- **批量 session payload**（`--summary-json`）：会话末尾一次性记多类信息
-
-每次写入还会过一次 `is_cross_branch_candidate`：如果内容不含分支特有名词 + 含"经验/模式/通用"类信号，会额外 append 到 `pending-promotion.md`，供 graduate 预筛。
-
-每个 kind 有自己的 `default_mode`：
-- 累积型（decision / risk / glossary）默认 **append**，新条目不覆盖旧的
-- 快照型（progress / next / overview / scope / stage / constraint）默认 **upsert**，始终反映最新状态
-
-### Capture dedup check（0.18 起）
-
-append 类 kind 写入前会对目标 section 做相似度查重，阻止 append-only 累积矛盾决策（典型场景：6 天里"5/14 旧版"+"5/15 修正"+"5/19 再修正"三层叠加互相矛盾）。
-
-- **算法**：`difflib.SequenceMatcher` 比 first non-empty line 前 80 字符；中文 supersedes 关键词（`重新校正 / 已更新 / 推翻 / 取代` 等）+0.15 boost
-- **阈值**：similarity ≥ 0.7 视为疑似重复
-- **行为**：命中拦下不写，`exit 2`，stdout 返 `dedup_hint` 含 `matches[]` + `recommendation`（`update_existing` / `review_and_decide`）
-- **agent 处理**：按 recommendation 分流：
-  - 修订旧条目 → `dev-memory-cli capture rewrite-entry --id <match_id> --content <text>`（新 subcommand）
-  - 删除旧条目 → `dev-memory-cli capture delete-entry --id <match_id>`
-  - 确实是独立新事实 → `dev-memory-cli capture record --force ...`（绕过查重）
-  - 误判同义 / 暂不写 → 不调任何命令
-- **绕过**：`--force` flag；upsert 类 kind（progress / next / overview / scope / stage / constraint）天然跳过 dedup
-- **批量**：`record --summary-json` 每条独立 check，blocked 项进 stdout `dedup_blocked[]`，未 blocked 部分照常写；SessionEnd 自动总结优先走 `capture apply-summary-output --json`，支持 upsert / append / rewrite / delete 的结构化 patch
-- **调试 / 实验**：可用 `--dedup-threshold <float>`（隐藏参数，范围 (0.0, 1.0]）临时覆盖默认 0.7 阈值，生产场景不建议改
-
-### Setup vs Tidy vs Graduate（三个整理动作的边界）
-
-| 命令 | 输入状态 | 输出状态 | 主要动作 |
-|---|---|---|---|
-| `setup` | 无序（unsorted.md 一堆乱炖）| 有序（按 kind 分类塞进 decisions/progress/...）| add |
-| `tidy` | 有序但漂移（陈旧 / 重复 / 模板残留）| 有序且校准 | delete + edit + reset（破坏性，先备份）|
-| `graduate` | 分支完成 | 跨分支知识上提 + 归档 branch 目录 | 提炼 + 归档 |
-
-三个互不替代：tidy 不分类、不归档、不跨分支提炼；setup 不删、不重写；graduate 不动单分支内的 stale 条目。`tidy` 工作流是 agent 把相关条目聚合成"事项级 proposal"（如"清掉 demo 资产列表" / "重置 unsorted.md" / "删除整个 v1 残留 section"），生成静态 HTML 让用户对每个 proposal 选 accept / reject / custom（写自由文本反馈），导出 plan.json 后 apply；apply 永远先把整个 scope 备份到 `branches/<branch>/tidy_backup_<ts>/`。
-
-**0.18 起的 tidy 改进**：
-
-- `prepare` 多输出一份 `entries.annotated.md` 镜像 —— 原 markdown 结构 + 每个 top-level bullet 行末贴 `<!-- id: ... -->` 注释 + block 边界注释 + 不在 entry 内的 bold paragraph 标 `<!-- orphan: paragraph -->`。agent 读这一份就能同时拿到语义结构 + 所有 id 映射，不用读两次（解决"JSON 把 markdown 拍扁丢上下文"问题）
-- 新 action `delete-block`：把 top bullet + 缩进子树 + 紧跟的 `**Why:**` / `**How to apply:**` bold paragraph 聚成一个语义单元整体删，自动吸附 orphan paragraph
-- action 优先级 `reset-file > delete-section > delete-block > delete-entries / edit-entries`，apply 时高优先级覆盖低优先级
-- `delete-block` 的 block_id 在 apply 时**重新解析**当前文件结构定位（不依赖 prepare 时的快照），文件中途被改不误删邻块
-- `prepare` 默认跑两个轻量启发式 pass 给 entry 贴 hint，让 review 从"全表扫一遍"变成"先看高亮"：**STALE**（文件在 `log.md` 最近一次出现 ≥ `--stale-after-days`（默认 30）天前 → 该文件下所有 entry 标 STALE）、**ORPHAN**（glossary entry 的 key phrase——冒号前 ≥ 4 字符——在其他 `.md` 零引用 → 标 ORPHAN，同 entry 上 ORPHAN 优先 STALE）。用户传 `--hints-json` / `--hints-file` 时用户优先；`--no-auto-hints` 关闭；冷启动 `log.md` 为空时不标，避免一次性给所有文件贴 STALE（HUB GAP 不实现，中文 NLP false positive 太干扰）
-- `apply` 落盘后写一行 `log.md`（accepted / rewritten / backup 等详情）
-
-### 分支记忆生命周期（0.14 起新增 CLI）
-
-`dev-memory-cli branch` 提供分支记忆目录级别的迁移和重置（不是 skill，是 CLI）。无参数进入交互式：检查当前分支记忆状态（已使用 / 空骨架 / 未初始化）后给出对应动作菜单，候选分支用 `@clack/prompts` 的 type-ahead 过滤，键入几个字符就能定位。
-
-```
-dev-memory-cli branch                                    # 交互式
-dev-memory-cli branch list                               # JSON 全分支快照
-dev-memory-cli branch rename --source A --target B [--backup | --force]
-dev-memory-cli branch fork   --source A --target B [--backup | --force]
-dev-memory-cli branch delete [--branch X]                [--backup | --force]
-dev-memory-cli branch init   [--branch X]                [--backup | --force]
-dev-memory-cli branch inherit-worktree-base [--source NAME] [--backup | --force]
-```
-
-破坏性操作三档冲突处理：
-
-- **默认 abort**：目标已使用时直接报错，不动数据
-- **`--backup`**：目标移到 `branches/_archived/<key>-<UTC>/` 后再执行（推荐）
-- **`--force`**：直接覆盖；自动写一份 `/tmp/dev-memory-force-backup/<repo-key>/<branch-key>-<UTC>/` 安全网，跨重启 macOS 会清，但同会话内误操作可恢复
-
-`fork` / `rename` 自动重写 5 个 markdown 里的"## 分支"机械字段为新分支名，重置 `progress.md` 的 auto-sync 区为占位（让下次 SessionStart 重生成），并在 `overview.md` 头部插入"## 分支起源"块记录来源分支与时间。用户自由文本里出现的源分支名不动 —— 那是真实历史叙事，改了反而破坏因果。
-
-### Worktree 首次进入自动继承源分支记忆（0.17.3 起）
-
-`git worktree add -b feat/x ../wt-x master` 这类场景下，新分支 `feat/x` 是从 `master` 拉出来开的新任务，但之前的 v2 架构里新 worktree 进入会落一个空骨架，`master` 上累积的决策 / 风险 / 术语都丢了。0.17.3 起在 lazy-init 阶段：
-
-1. 检测当前 checkout 是 linked worktree（`--git-dir` 与 `--git-common-dir` 不一致）
-2. 读 `git reflog show --format=%gs <current-branch>` 最旧一条，匹配 `branch: Created from X` 拿到源分支名
-3. 校验源分支是真实本地 ref、且对应记忆目录存在且非空骨架
-4. `shutil.copytree` 整份记忆 → 新分支目录，复用 `fork` 的机械字段重写 + 在 `overview.md` 头部插入 `## 分支起源 · auto-inherited (worktree) from X`，manifest 的 `provenance` 追加 `op: worktree-inherit`
-
-兜底与边界：
-
-- 任意一步推不出（脱离 `worktree add -b` 写法、reflog 滚动丢失、源记忆是空骨架）→ 静默回退到原空骨架行为，不阻塞
-- 环境变量 `DEV_MEMORY_DISABLE_WORKTREE_INHERIT=1` 全局关闭
-- 已经开过会话的 worktree 想后补 → 显式跑 `dev-memory-cli branch inherit-worktree-base`（支持 `--source` 覆盖 reflog 探测）
-
-如果希望 worktree 分支写入时把新增知识也写回源分支，可以显式开启 write-back：
-
-```bash
-git config --local dev-memory.worktreeWriteback true
-# 或仅当前进程启用
-DEV_MEMORY_WORKTREE_WRITEBACK=1 dev-memory-cli capture record ...
-```
-
-write-back 只镜像 append 型分支知识：`decision` / `risk` / `glossary` / `source`。`progress` / `next` / `overview` / `scope` / `stage` / `constraint` 这类快照字段不会回源，因为它们表达当前 worktree 分支状态，双写会覆盖源分支自己的工作态。源分支重复内容会走同一套 dedup 检查；被拦截时当前分支写入仍然保留，只在输出的 `worktree_writeback.skipped` 里报告。
-
-### Graduate 为什么必须显式
-
-`dev-memory-graduate` 会做 destructive move（把 `branches/<key>/` 搬到 `branches/_archived/<key>__<date>/`），同时把 branch 记忆里跨分支可复用的知识（剥离业务命名后）上提到 repo 共享层。**只接受用户显式触发**，不做 implicit 调用。在 no-git 模式下直接拒绝（没有分支概念）。Tidy 同样要求显式触发（用户主动说"整理"），不做 implicit。
-
-apply 写入受 **repo 级队列锁**保护：多个会话可连续发起归档，但 harvest / schema / branch 等 pre-flight 校验先于锁执行（失败立即返回），只有写 repo 共享层和移动归档目录的阶段按 repo memory 目录串行等待；等待者拿到锁后会重新确认 `branch_dir` 仍存在，避免并发写共享记忆或重复 move。
-
-## 运行模式
-
-套件会根据当前工作目录自动切换运行模式，存储布局 key 始终是 `(仓库身份, 分支)`：
-
-| 模式 | 触发条件 | 行为 |
-| --- | --- | --- |
-| 单 repo | cwd 本身是 git 仓库 | 最原始行为，所有 hook/skill 直接作用于当前 repo+branch |
-| Workspace | cwd 不是 git 仓库，但第一级子目录里至少有一个 git 仓库 | SessionStart 为 primary 仓库注入完整记忆 + 其它仓库按数量动态精简的 brief；Stop/PreCompact/SessionEnd 对每个仓库各记一次 HEAD；skill 通过 `--repo <basename>` 明确目标仓库 |
-| No-git | cwd 不是 git 仓库，也不是 workspace | 在当前目录落一个 `.dev-memory-id` dotfile 作为仓库身份，分支层退化成单一共享层（sentinel `_no_git`），`dev-memory-graduate` 此模式下直接拒绝 |
-
-Primary 仓库优先读 `DEV_MEMORY_PRIMARY_REPO` / `DEV_ASSETS_PRIMARY_REPO` 环境变量；未设置时读 workspace 根目录下的 `.dev-memory-workspace.json`：
-
-```bash
-dev-memory-cli workspace primary <repo-basename>
-```
-
-`<repo-basename>` 是仓库目录名，不是绝对路径。环境变量适合临时覆盖；`.dev-memory-workspace.json` 适合多个 workspace 各自保存不同 primary。
-
-## 存储布局
-
-默认存储在仓库外的用户目录：
-
-![v2 存储布局](docs/diagrams/storage.png)
-
-```text
-~/.dev-memory/repos/<repo-key>/
-  repo/                           # 跨分支共享层
-    overview.md                   # 长期目标 + 约束
-    decisions.md                  # 跨分支通用决策
-    glossary.md                   # 共享入口 + 长期背景
-    log.md                        # 仓库事件日志（graduate / shared-* capture 镜像）
-    manifest.json
-  branches/
-    <branch>/                     # 当前分支层
-      overview.md                 # 冷启动摘要（snapshot 型）
-      progress.md                 # 当前进展 + 下一步 + 自动同步区（snapshot 型）
-      decisions.md                # 稳定决策 + Why + 影响（accumulation 型）
-      risks.md                    # 阻塞 + 注意点（accumulation 型）
-      glossary.md                 # 术语 + 源资料入口（accumulation 型）
-      log.md                      # append-only 事件时间线（capture / graduate 落盘后追加）
-      unsorted.md                 # heuristic 兜底（setup 时分类）
-      pending-promotion.md        # 跨分支候选 staging（graduate 预筛源）
-      manifest.json               # 含 setup_completed
-      artifacts/history/
-    _archived/                    # graduate 归档产物
-      <branch>__<YYYYMMDD>/
-      INDEX.md
-```
-
-**文件按语义分两类：**
-
-- **snapshot 型**（progress / overview 里各 section）：写入时 upsert 覆盖，始终反映最新状态
-- **accumulation 型**（decisions / risks / glossary）：写入时 append 追加，新条目不覆盖旧的
-
-**其他关键点：**
-
-- `log.md`：append-only 事件时间线，capture record / rewrite-entry、graduate apply、tidy apply 落盘后各追加一行 `## [ISO] action · kind | summary`，`grep '^## \[' log.md | tail -20` 看最近事件。SessionStart 只列文件路径不抽正文（lazy loading）；`sync-working-tree` / `record-head` 故意不写以免机器噪音冲洗日志；`shared-*` kind 写入会镜像到 repo log，分支-only 写入不污染 repo log
-- `repo-key`：优先按仓库 remote 身份派生，不只看目录名；支持多 clone / worktree 共享同一套记忆
-- `DEV_ASSETS_ROOT`：覆盖默认 `~/.dev-memory/repos`；CLI、所有 hook 脚本、所有 skill 脚本都尊重此环境变量
-- v1 → v2 迁移在第一次 capture/context 时自动触发，老的 `development.md` / `context.md` / `sources.md` 按 section 切分进 v2 对应文件后删除（单用户离线清理，不保留 .legacy）
+Skill 定义触发语义与协作流程，文件操作统一由 `dev-memory-cli` 执行。
 
 ## 安装
 
-### 1. 通过 `npx skills` 安装 skill 套件
+运行环境：Node.js 18+、Python 3；Git 仓库模式依赖 Git。
 
-列出可用 skill：
+### 安装 Skill
+
+列出仓库提供的 skill：
 
 ```bash
 npx skills add xluos/dev-memory-skill-suite --list
 ```
 
-全量装到 Codex 全局：
+安装到 Codex 全局：
 
 ```bash
 npx skills add xluos/dev-memory-skill-suite --skill '*' -a codex -g -y
 ```
 
-为检测到的所有 agent 装一遍：
+安装到检测到的所有 agent：
 
 ```bash
 npx skills add xluos/dev-memory-skill-suite --all -g -y
 ```
 
-### 2. 安装生命周期 hook
-
-推荐先把 `dev-memory-cli` 装成全局命令，再在目标仓库合并 hook：
+### 安装 CLI 与 Hook
 
 ```bash
-npm install -g dev-memory-cli                 # 一次
-dev-memory-cli install-hooks codex                       # 在目标仓库内（默认 cwd）
+npm install -g dev-memory-cli
+
+# 在当前仓库安装生命周期 hook
+dev-memory-cli install-hooks codex
 dev-memory-cli install-hooks claude
+
+# 或一次安装两套
+dev-memory-cli install-hooks --all
 ```
 
-装到 agent 用户级配置而不是每个 repo：
+安装到 agent 用户级配置：
 
 ```bash
-dev-memory-cli install-hooks codex --global              # 写入 ~/.codex/hooks.json
-dev-memory-cli install-hooks claude --global             # 写入 ~/.claude/settings.json
+dev-memory-cli install-hooks --all --global
 ```
 
-用 `--all` 一次装两种 agent：
+CLI 也可通过 `npx -y dev-memory-cli ...` 按需执行。Skill 与 hook 相互独立，安装 skill 不会修改本地 hook 配置。
+
+Codex Desktop 没有本仓库依赖的项目生命周期 hook。安装每日扫描任务可覆盖 Codex CLI 和 Desktop 共同写入的本机会话文件：
 
 ```bash
-dev-memory-cli install-hooks --all                       # 两个 agent，repo 级
-dev-memory-cli install-hooks --all --global              # 两个 agent，用户级
+dev-memory-cli session-scan install
+dev-memory-cli session-scan status
 ```
 
-没装全局 CLI 时，也可以 `npx` 按需下载：
+扫描任务默认在本地时间 03:00 运行。`install-hooks codex` 只安装 CLI hook，不会隐式安装定时任务。
+
+## 基本使用
+
+写入操作具备 lazy initialization。存储骨架缺失时自动创建，setup 不作为写入前置条件。
 
 ```bash
-npx -y dev-memory-cli install-hooks codex
-npx -y dev-memory-cli install-hooks claude --global
+# 查看当前仓库和分支对应的记忆路径
+dev-memory-cli read show
+
+# 只在当前 repo 的记忆范围内搜索
+dev-memory-cli read search --query "发布流程" --query "回滚"
+
+# 写入一条分支决策
+dev-memory-cli capture record \
+  --kind decision \
+  --content "发布前必须先跑完整打包检查"
+
+# 写入一条跨分支规则
+dev-memory-cli capture record \
+  --kind shared-decision \
+  --content "Python 测试优先使用项目虚拟环境"
+
+# 刷新 Git working tree 派生的文件索引
+dev-memory-cli capture sync-working-tree
 ```
 
-已有旧 hook 配置如果还写着 `dev-memory hook ...` 或 `npx dev-memory hook ...`，重跑上面的 `install-hooks` 会按同一组 hook id 覆盖成 `dev-memory-cli hook ...`。
-
-Shell 包装器（`scripts/install_codex_hooks.sh`、`scripts/install_claude_hooks.sh`）只是上面命令的 shell 入口，适合偏好 shell 的环境。
-
-### 3. 浏览已存储的记忆（可选）
-
-装完 CLI 后，可以用 `dev-memory-cli ui` 起一个本地浏览器界面，查看 `~/.dev-memory/repos/` 下所有 `(仓库, 分支)` 的记忆文件：
+`read search` 默认搜索当前 branch + repo 共享层。跨分支和归档范围通过 `--scope` 显式指定：
 
 ```bash
-dev-memory-cli ui                      # 随机端口 + 自动打开浏览器
-dev-memory-cli ui --port 7878          # 固定端口
-dev-memory-cli ui --no-open            # 只起服务，不开浏览器
-dev-memory-cli ui --read-only          # 禁用编辑回写
+dev-memory-cli read search --scope all-branches --query "关键词"
+dev-memory-cli read search --scope archived --query "关键词"
 ```
 
-界面提供：
+### 写入路由
 
-- 左栏：可搜索的仓库卡片列表（显示短名 + 完整 key + 分支数）
-- 右栏：选中仓库的结构化信息（仓库级记忆文件 + 分支 pill-tab 切换 + 每个分支的 manifest 摘要和记忆文件卡片）
-- 卡片内 md 文件会渲染为 heading / 列表 / 代码块等，预览区过长会截断并提供"展开全部"弹窗
-- 弹窗内可点"编辑"直接修改 `.md` / `.json` 并保存（`Cmd/Ctrl+S` 保存，`Esc` 取消）；写入仅限存储目录内已存在的文件，`.json` 会先做语法校验再原子落盘
+![Capture 写入路由](docs/diagrams/capture.png)
 
-默认绑定 `127.0.0.1`，仅本机可访问。需要彻底禁用写入时加 `--read-only`。没装全局 CLI 时同样可以 `npx -y dev-memory-cli ui`。
+`capture record` 支持三种输入方式：
+
+- **显式 kind**：调用方明确指定内容语义，直接写目标 section。
+- **自动分类**：`--auto` 根据文本信号判断 decision、risk、glossary；无法明确分类时进入 `unsorted.md`。
+- **结构化批量输入**：`--summary-json` 或 `apply-summary-output` 把一次会话产生的多类知识批量落盘。
+
+主要 kind 与落点：
+
+| Kind | 落点 | 写入方式 |
+| --- | --- | --- |
+| `decision` | `branches/<branch>/decisions.md` | append |
+| `risk` | `branches/<branch>/risks.md` | append |
+| `glossary` / `source` | `branches/<branch>/glossary.md` | append |
+| `overview` / `scope` / `constraint` | `branches/<branch>/overview.md` | upsert |
+| `filemap` | `branches/<branch>/progress.md` | upsert |
+| `unsorted` / `pending` | 分支层对应文件 | append |
+| `shared-decision` | `repo/decisions.md` | append |
+| `shared-context` / `shared-source` | `repo/glossary.md` | append |
+| `shared-overview` / `shared-constraint` | `repo/overview.md` | upsert |
+
+`progress.md` 用于 Git 派生导航和功能文件索引，不承载人工维护的进度流水账。临时工作状态归属于当前会话、任务系统或 Git 工作区；dev-memory 仅记录跨会话仍然有效的稳定信息。
+
+append 类写入执行相似 entry 检查。旧内容修订采用“读取原条目，再改写或删除”的流程：
+
+```bash
+dev-memory-cli capture list-entries --kind decision --tail
+dev-memory-cli capture find-candidates --kind decision --query "旧结论"
+dev-memory-cli capture rewrite-entry --id <entry-id> --content "修正后的完整结论"
+dev-memory-cli capture delete-entry --id <entry-id>
+```
+
+符合跨分支复用判定的内容会同时进入 `pending-promotion.md`，由 graduate 在分支收尾阶段审核；候选内容不会直接写入 repo 共享层。
+
+### 整理与归档
+
+三个维护动作边界不同：
+
+| 动作 | 处理对象 | 结果 |
+| --- | --- | --- |
+| `setup` | `unsorted.md` 中尚未分类的内容 | 合并到 decisions、risks、glossary 或 repo 共享层 |
+| `tidy` | 已结构化但陈旧、重复或错误的内容 | proposal 审核，备份后 edit/delete/reset |
+| `graduate` | 已完成分支的有效记忆 | 上提跨分支知识，并把分支目录移入 `_archived` |
+
+`tidy apply` 和 `graduate apply` 会改变或移动已有记忆，仅在显式调用后执行。
+
+### 分支记忆操作
+
+```bash
+dev-memory-cli branch                         # 交互式操作
+dev-memory-cli branch list
+dev-memory-cli branch inspect --branch feature/example
+dev-memory-cli branch fork --source main --target feature/example
+dev-memory-cli branch rename --source old --target new
+dev-memory-cli branch init --branch feature/example --backup
+dev-memory-cli branch delete --branch feature/example --backup
+dev-memory-cli branch inherit-worktree-base
+```
+
+目标分支已有内容时默认拒绝覆盖。`--backup` 会先归档目标记忆；`--force` 用于明确接受覆盖风险的场景。
+
+linked worktree 首次创建记忆时会尝试从 reflog 识别源分支并继承记忆。append 型知识写回源分支由以下配置显式启用：
+
+```bash
+git config --local dev-memory.worktreeWriteback true
+```
 
 ## 生命周期 Hook
 
-这套不再使用 Git hook，改用 ECC 风格的生命周期 hook，Claude 和 Codex 都支持：
-
-| 事件 | Claude | Codex | 做什么 |
+| 事件 | Codex CLI | Claude Code CLI | 行为 |
 | --- | :-: | :-: | --- |
-| `SessionStart` | ✅ | ✅ | 跑 `context sync` 刷 progress.md auto 区，抽 14 段摘要 + 列权威记忆文件路径，注入会话上下文；同一 session resume 重触发时只写日志并返回空 payload |
-| `PreCompact` | ✅ | ✕ | **0.17 起 no-op**（SessionStart 已经刷过，重复跑无信号） |
-| `Stop` | ✅ | ✅ | 每次回复后落一个轻量 HEAD marker |
-| `SessionEnd` | ✅ | ✕ | 会话结束时再落一次最终 HEAD，并把 transcript 总结任务写入队列 |
+| `SessionStart` | ✓ | ✓ | 刷新 Git 派生索引，注入浓缩记忆和完整文件路径；同一 session 幂等 |
+| `Stop` | ✓ | ✓ | 记录轻量 HEAD marker；Codex 同时登记待扫描会话，不启动模型 |
+| `PreCompact` |  | ✓ | 兼容占位，当前不执行额外刷新 |
+| `SessionEnd` |  | ✓ | 记录最终 HEAD，并把 transcript 总结任务放入后台队列 |
 
-重要边界：
+### 会话总结
 
-- 本仓库只提供**模板 + CLI**，真正生效的是你本地 `.codex/hooks.json` / `.claude/settings.local.json` / `~/.codex/hooks.json` / `~/.claude/settings.json` 里有没有合并进来
-- hook 运行时统一走 `dev-memory-cli hook ...`，所以 CLI 必须在 PATH 上或可被 `npx` 解析
-- hook 只做**低摩擦恢复 + 轻量刷新**，不在 hook 里重写高语义正文
-- `SessionStart` 以 `<repo-memory>/jobs/session-start/injected/*.json` 做同 session 幂等；Codex resume 等场景再次触发生命周期事件时，只写 skip 日志并返回空 payload，不重复注入上下文
-- `SessionEnd` 只 enqueue 总结任务，不同步跑总结：任务写到 `<repo-memory>/jobs/session-summary/pending/*.json`，事件日志写到同目录 `events.jsonl`。同一 repo+branch+session 会更新同一个 job，避免短时间重复结束时冲突
-- enqueue 后是否启动后台 summarizer 由 `~/.dev-memory/config.json` 的 `session_summary.command` 决定；`install-hooks` 会扫描本地工具，按 `coco -> codex -> claude` 顺序写默认值。coco 默认用 `--session-id {summary_session_id}`，Claude 默认用 UUID 形态的 `{summary_session_uuid}`。hook 会启动后台 worker，worker 先确定性提取 transcript core messages + existing memory，写入 `<repo-memory>/jobs/session-summary/inputs/*.json`，再把这份 JSON 内联进 `{prompt}`；agent 只输出 summary-output JSON，不调用 CLI、不移动 job。worker 会校验 JSON，格式错误时用同一个 summary session 最多重试 3 次，然后由代码执行 `apply-summary-output` 并迁移 pending/done/skipped/failed；无 touched targets 的空总结进入 `skipped/`，不刷新 capture manifest，不算真实落盘
-- `DEV_MEMORY_SESSION_SUMMARY_CMD` 只作为临时调试 override；要禁用后台 summarizer，可清掉配置里的 `session_summary.command`，或设置 `DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT=1`
-- 全局 skill 安装不会自动加载 hook —— 这是一个 skill suite，不是独立 agent 插件
+Claude Code CLI 通过 `SessionEnd` 创建后台总结任务。Codex CLI 没有 `SessionEnd`，其 `Stop` hook 只登记候选；Codex Desktop 不依赖 hook。Codex 两种入口统一由每日扫描器读取 `~/.codex/sessions` 和 `~/.codex/archived_sessions`。
 
-## CLI 入口
+任务触发端与总结执行端相互独立。Claude 的即时 worker 和 Codex 定时扫描器都可以使用 `coco`、`codex` 或 `claude` CLI。扫描器在 `~/.dev-memory/config.json` 的 `session_scan` 中内置三个可配置 preset，默认按 `coco → codex → claude` 选择第一个可用命令；每个 preset 可指定模型、profile、额外参数和环境变量。
 
-从 0.10.0 开始所有 skill 的执行逻辑都搬到 `lib/` 下，由 `dev-memory-cli` 统一暴露成嵌套子命令。SKILL.md 里写的命令也从早期的 `python3 /absolute/path/to/<skill>/scripts/<name>.py` 改成 `npx dev-memory-cli <skill> <subcommand>`。这套架构有两个好处：
+总结输入包含全部尚未处理的 user/assistant 语义消息和现有 dev-memory，不按“最近几条”截尾，也不截断单条消息。长会话按顺序分块并最终归并；工具调用流水账、system 消息和 reasoning 不参与语义总结。输出限定为结构化 JSON，用于新增或修正 decisions、risks、glossary、file map 和 repo 共享记忆；时效性的“当前进展”“下一步”“当前阶段”不会写入。
 
-1. `npx skills add` 把 skill 装到 `~/.claude/skills/<skill>/` 后，`SKILL.md` 调用的命令仍能解析（CLI 是 npm 包提供的，不依赖 skill 的物理位置）
-2. 共享 helper（`dev_memory_common.py`）只在 npm 包里有一份，没有副本漂移问题
+会话总结不是纯追加流程。最终归并会读取当前 branch 和 repo 的已有记忆，再根据新材料选择对应操作：
 
-CLI 暴露的子命令：
+- `append`：增加新的决策、风险、术语或资料入口。
+- `upsert`：更新 overview、file map 等快照型内容。
+- `rewrite`：旧结论已经失效或需要纠正时，改写原 entry。
+- `delete`：已有 entry 已过期、错误或被新结论取代时删除。
+- `skip`：与已有记忆相比没有有效变化时不写入。
 
-| 类别 | 命令 | 用途 |
-|---|---|---|
-| Hook（自动触发，别手动调）| `dev-memory-cli hook <session-start\|pre-compact\|stop\|session-end>` | 由 `.codex/hooks.json` / `.claude/settings.local.json` 自动调用 |
-| 安装助手 | `dev-memory-cli install-hooks <codex\|claude\|--all>` | 把 hook 模板合并到目标配置 |
-| 浏览器 UI | `dev-memory-cli ui [--port N] [--read-only]` | 启动本地浏览器界面看/编辑记忆 |
-| 分支生命周期 | `dev-memory-cli branch [list\|inspect\|rename\|fork\|delete\|init]` | 分支记忆迁移 / 副本 / 重置（无参数 = 交互式 type-ahead）|
-| Skill 工作流（agent 在 SKILL.md 里调用，也能手动跑）| `dev-memory-cli read <show\|search>` | 主动读取入口：精确定位当前 repo+branch 记忆路径，按关键词只搜当前 repo 的记忆 |
-| | `dev-memory-cli capture <record\|rewrite-entry\|delete-entry\|apply-summary-output\|show\|suggest-kind\|...>` | 统一写入入口（含 dedup、结构化 patch executor） |
-| | `dev-memory-cli setup <init\|merge-unsorted\|mark-completed>` | 整理 unsorted |
-| | `dev-memory-cli tidy <prepare\|apply>` | 浏览器化的批量 review + 落盘（0.18 起含 annotated md + delete-block）|
-| | `dev-memory-cli graduate <dry-run\|apply\|index>` | 分支归档 + 跨分支知识上提 |
-| 内部（hook 用，也能手动）| `dev-memory-cli context <show\|sync>` | 输出 paths JSON / 刷新 progress.md auto 区。0.17 起不再以 skill 形式暴露，CLI 命令保留 |
+模型只生成结构化操作建议，不直接编辑记忆文件。`apply-summary-output` 会校验目标 entry、执行去重并应用变更；没有充分依据时保留现有条目，不为了“整理”而自动删除。
 
-子命令的 sub-subcommand 和参数由 Python 端 argparse 拥有，CLI 只透传 argv。
+累积型语义 section 默认最多保留最新 200 条，可通过 `DEV_MEMORY_MAX_ENTRIES` 调整；repo 共享决策和长期背景使用更严格的 20 条上限。Markdown 文件维持 oldest-to-newest 的稳定存储顺序，SessionStart 注入时按 newest-to-oldest 选取并排列内容，因此有限的注入窗口始终优先包含最新记忆。overview、file map 等快照型 section 采用覆盖更新，不累积历史版本。事件日志和 artifacts 不计入这项语义条目上限。
 
-## 仓库目录结构
+扫描游标只在所有分块完成并成功落盘后推进。Codex 执行器强制使用 `--ephemeral`，内部总结 session ID 和 prompt marker 也会被发现阶段排除，避免扫描器递归总结自己产生的会话。完整配置、账本和队列说明见 [hooks/README.md](hooks/README.md#codex-定时扫描)。
 
-```text
-bin/
-  dev-memory.js              # `npx dev-memory-cli` CLI 入口（嵌套子命令 dispatch）
-hooks/
-  hooks.json                 # Claude hook 模板（.claude/settings.local.json）
-  codex-hooks.json           # Codex hook 模板（.codex/hooks.json）
-  README.md
-lib/                         # 所有 Python 业务逻辑都集中在这里（npm 包发布时随包带）
-  dev_memory_common.py        # 共享公共库（path 解析、template、git facts、merge helpers ...）
-  dev_memory_read.py          # `dev-memory-cli read` 子命令实现（只读定位 + 搜索）
-  dev_memory_context.py       # `dev-memory-cli context` 子命令实现
-  dev_memory_capture.py       # `dev-memory-cli capture` 子命令实现
-  dev_memory_setup.py         # `dev-memory-cli setup` 子命令实现
-  dev_memory_tidy.py          # `dev-memory-cli tidy` 子命令实现
-  dev_memory_graduate.py      # `dev-memory-cli graduate` 子命令实现
-  ui-server.js / ui-app.html # `dev-memory-cli ui` 浏览器界面（含编辑回写）
-  assets/tidy_review.html    # tidy prepare 渲染的浏览器审阅页模板
-scripts/
-  hooks/                     # session_start / pre_compact / stop / session_end — 通过 `dev-memory-cli hook ...` 调用
-  install_codex_hooks.sh     # 一键安装 shell 入口；install_claude_hooks.sh 是它的 symlink
-  install_claude_hooks.sh -> install_codex_hooks.sh
-  install_suite.py           # 本地开发用的 symlink 安装器
-  npm/                       # 打包 check/build 助手
-skills/                      # SKILL.md + agents/openai.yaml + references/ 三件套；不再带 scripts/
-  dev-memory-read/
-  dev-memory-capture/
-  dev-memory-setup/
-  dev-memory-tidy/
-  dev-memory-graduate/
-suite-manifest.json          # 套件 + 历史遗留 skill 命名的唯一表
+常用扫描命令：
+
+```bash
+dev-memory-cli session-scan run --dry-run --json
+dev-memory-cli session-scan run
+dev-memory-cli session-scan stats --json
+dev-memory-cli session-scan history --limit 20
+dev-memory-cli session-scan config show
+dev-memory-cli session-scan config set-executor codex
+dev-memory-cli session-scan config set-model codex <model>
 ```
 
-每个 skill 内部就是声明性的：
+## 运行模式
 
-```text
-skills/<skill-name>/
-  SKILL.md                   # 声明 name / description / 工作流（运行时会被 agent 读到）
-  agents/openai.yaml         # OpenAI 风格 agent 的附加元信息（可选）
-  references/*.md            # 辅助参考，仅在 SKILL.md 明确引用时读取（可选）
+| 模式 | 检测条件 | 行为 |
+| --- | --- | --- |
+| 单 repo | 当前目录位于 Git 仓库内 | 读取和写入当前 repo + branch |
+| Workspace | 当前目录不是 Git 仓库，但一级子目录包含 Git 仓库 | 主仓库注入完整上下文，其余仓库按数量注入精简 brief |
+| No-git | 当前目录和一级子目录都不是 Git 仓库 | 使用 `.dev-memory-id` 建立目录身份，分支层折叠到 repo 层 |
+
+Workspace 主仓库配置持久化在 workspace 根目录：
+
+```bash
+dev-memory-cli workspace show
+dev-memory-cli workspace primary <repo-basename>
 ```
 
-实际可执行逻辑都在 `lib/dev_memory_<skill>.py` 里，由 `dev-memory-cli <skill> <sub>` 子命令调用 —— 用户走 `npx skills add` 装到 `~/.claude/skills/<skill>/` 时也只需要 SKILL.md，不需要 scripts 副本。
+`DEV_MEMORY_PRIMARY_REPO` 可作为临时 override。Skill 在 workspace 中写入时应使用 `--repo <repo-path-or-basename>` 明确目标仓库。
 
-## 设计要点
+## 存储结构
 
-- **repo 层不是 branch 层的替代**：同仓库不同分支的目标、阶段、阻塞通常会分叉，所以 branch 记忆仍是主执行上下文，repo 是跨分支稳定背景
-- **Git 历史留在 Git**：做了什么、改了哪些文件、什么时候改的 —— 都优先看 `git log` / `git show`，不往 dev-memory 里复制提交流水账
-- **共享资料入口放 repo 层**：评审文档、长期设计链接、跨分支规范入口放 `repo/glossary.md`；分支独占的热路径 / 优先阅读清单放 `branches/<branch>/glossary.md`
-- **hook 只保底，不主写**：高语义正文靠 `capture` / `graduate` 在对话里写，不依赖 hook 自动重写
-- **destructive 动作一律显式**：`graduate` 归档和 `tidy` 落盘都必须用户明确授权，不接受 implicit 触发；tidy apply 永远先备份整份 scope 到 `tidy_backup_<ts>/`
-- **lazy init 而非门禁**：任何写入都会自动把骨架建出来，不需要事先 setup；setup 的职责是把 lazy 累积的 unsorted 内容升级成结构化
-- **proposal 比 entry 更接近用户心智**：tidy 不让用户对每条 bullet 单独表态（决策点爆炸），而是 agent 把相关条目聚合成"事项级 proposal"；用户对 proposal 整体 accept/reject/custom，决策点从 N 条 entry 降到 ~3-8 个 proposal
+默认存储根目录是 `~/.dev-memory/repos`，可用 `DEV_MEMORY_ROOT` 或 Git 配置 `dev-memory.root` 覆盖。
+
+![Dev Memory 存储结构](docs/diagrams/storage.png)
+
+```text
+~/.dev-memory/repos/<repo-key>/
+  repo/
+    manifest.json
+    overview.md                  # 长期目标和仓库级约束
+    decisions.md                 # 跨分支通用决策
+    glossary.md                  # 长期背景和共享入口
+    log.md                       # repo 级事件日志
+    artifacts/
+  branches/
+    <branch-key>/
+      manifest.json
+      overview.md                # 当前目标、范围、约束
+      progress.md                # Git 派生导航和功能文件索引
+      decisions.md               # 分支决策及原因
+      risks.md                   # 阻塞、风险和注意点
+      glossary.md                # 有效上下文与源资料入口
+      unsorted.md                # 待人工分类内容
+      pending-promotion.md       # 跨分支候选
+      log.md                     # 分支事件日志
+      artifacts/history/
+    _archived/
+      <archived-branch>/
+      INDEX.md
+```
+
+`repo-key` 优先根据 Git remote identity 计算，多个 clone 和 worktree 由此共享同一套记忆。分支名会转换为文件系统安全的 `branch-key`。
+
+Codex 原始会话和扫描审计账本位于：
+
+```text
+~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+~/.codex/archived_sessions/
+
+~/.dev-memory/jobs/session-scan/
+  candidates/                    # Codex Stop 登记的轻量候选
+  state/                         # 每个会话的已处理字节游标
+  sessions/                      # 会话大小、分块和用量摘要
+  runs/                          # 每次扫描的完整指标
+  logs/                          # LaunchAgent 标准输出与错误日志
+  events.jsonl
+  internal-sessions.jsonl        # 递归扫描排除表
+```
+
+仓库级总结任务仍位于 `~/.dev-memory/repos/<repo-key>/jobs/session-summary/`。扫描审计只保存路径、哈希、字节范围和结构化摘要，不复制完整会话原文。
+
+## 本地管理面板
+
+```bash
+dev-memory-cli ui
+dev-memory-cli ui --port 7878
+dev-memory-cli ui --no-open
+dev-memory-cli ui --read-only
+```
+
+管理面板默认只监听 `127.0.0.1`，提供 repo/branch 文件浏览、已有 Markdown 或 JSON 编辑、目标分支完整注入预览，以及按仓库和扫描运行聚合的原始大小、处理字节数与 token 用量。未返回 usage 的执行器调用单独标记，不按 0 token 处理。命令行预览入口如下：
+
+```bash
+dev-memory-cli context injection-preview \
+  --repo-key <repo-key> \
+  --branch <branch-name> \
+  --context-dir ~/.dev-memory/repos
+```
+
+## CLI 概览
+
+```text
+dev-memory-cli read <show|search>
+dev-memory-cli capture <show|suggest-kind|classify|record|list-entries|find-candidates|rewrite-entry|delete-entry|apply-summary-output|sync-working-tree|record-head>
+dev-memory-cli setup <init|merge-unsorted|mark-completed>
+dev-memory-cli tidy <prepare|apply>
+dev-memory-cli graduate <dry-run|apply|index>
+dev-memory-cli branch [list|inspect|rename|fork|delete|init|inherit-worktree-base]
+dev-memory-cli context <show|sync|injection-preview>
+dev-memory-cli workspace <show|primary>
+dev-memory-cli summary <extract-core>
+dev-memory-cli session-scan <run|install|status|stats|history|show|uninstall|config>
+dev-memory-cli hook <session-start|pre-compact|stop|session-end>
+dev-memory-cli ui
+dev-memory-cli install-hooks <codex|claude|--all>
+```
+
+具体参数以各子命令的 `--help` 为准。
 
 ## 设计边界
 
-这套**不**负责：
+dev-memory 的能力边界不包括：
 
-- 替代源文档系统
-- 长期保存完整会话流水账
-- 在 dev-memory 里复制提交历史
-- 自动抓取外部链接正文或做全文归档
-- 自动理解图片、附件、录音等非文本资产
+- 复制完整 PRD、会议记录或外部文档正文
+- 替代 Git 提交历史和 diff
+- 保存完整会话流水账
+- 自动归档图片、录音、附件等非文本资产
+- 把 branch-specific 的当前工作态写进 repo 共享层
 
-它最适合：
+存储内容限定为经过提炼、对后续开发仍有价值的目标、约束、决策、风险、术语、资料入口和文件导航。
 
-- 同一仓库下长期推进多个分支
-- 同一需求跨会话继续
-- 多分支共享稳定资料入口，但不共享当前工作态
-- 跨多 repo workspace 里保持各仓库记忆的隔离 + 聚合
+## 仓库结构
 
-## 许可
+```text
+bin/dev-memory.js              # CLI 入口与 Node 侧命令
+lib/dev_memory_*.py            # 记忆、分支、会话扫描、整理与归档实现
+lib/ui-server.js               # 本地管理面板服务
+lib/ui-app.html                # 管理面板前端
+scripts/hooks/                 # 生命周期 hook 实现
+hooks/                         # Codex / Claude hook 模板
+skills/                        # 五个 skill 的声明与工作流
+tests/                         # Python 测试
+docs/diagrams/                 # README 图表及源文件
+```
 
-见 [LICENSE](LICENSE)。
+## License
+
+[MIT](LICENSE)

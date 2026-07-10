@@ -1,19 +1,17 @@
 # Lifecycle Hooks
 
-这套仓库不再使用 Git hooks。
-
-现在采用的是接近 ECC 的生命周期 hooks，并同时支持 Claude 和 Codex 两种 agent。
+本项目使用 agent 生命周期 hook，不使用 Git hook。Claude Code 与 Codex 的可用事件不同，模板分别维护。
 
 ## 当前仓库里的接入方式
 
-- 推荐的 repo-local 落地点：
+- repo-local 配置位置：
   - Claude: `.claude/settings.local.json`
   - Codex: `.codex/hooks.json`
 - 可复用模板：
   - Claude: [hooks/hooks.json](hooks.json)
   - Codex: [hooks/codex-hooks.json](codex-hooks.json)
 - `dev-memory-cli` 是这两套配置共用的稳定执行入口
-- 是否自动生效取决于你本地是否把对应配置文件落到了各自约定位置，而不是模板文件本身
+- hook 仅在模板内容合并到对应 agent 配置后生效
 
 ### Codex 快速安装
 
@@ -40,48 +38,173 @@ dev-memory-cli install-hooks claude
 
 已有旧配置如果还写着 `dev-memory hook ...` 或 `npx dev-memory hook ...`，重新执行安装命令会按 hook id 覆盖为 `dev-memory-cli hook ...`。
 
-## 这些 hook 做什么
+## Hook 行为
 
-- Claude:
-  - `SessionStart`
-  - `PreCompact`
-  - `Stop`
-  - `SessionEnd`
-- Codex:
-  - `SessionStart`
-  - `Stop`
+| 事件 | Codex CLI | Claude Code CLI | 行为 |
+| --- | :-: | :-: | --- |
+| `SessionStart` | ✓ | ✓ | 读取当前 repo+branch 记忆并注入会话；同一 session 的重复触发幂等跳过 |
+| `Stop` | ✓ | ✓ | 每次回复后记录轻量 HEAD marker；Codex 同时登记定时扫描候选 |
+| `PreCompact` |  | ✓ | 兼容占位；当前不执行额外刷新 |
+| `SessionEnd` |  | ✓ | 记录最终 HEAD，创建 transcript 总结任务并启动后台 worker |
 
-语义分别是：
+`SessionStart` 的幂等记录位于 `<repo-memory>/jobs/session-start/injected/*.json`。重复触发只记录 skip 日志，不重复注入上下文。
 
-- `SessionStart`
-  读取当前 repo+branch 的 dev-memory，并把可恢复上下文注入新会话；同一 session resume 重触发时通过
-  `<repo-memory>/jobs/session-start/injected/*.json` 幂等跳过重复注入，只写 skip 日志并返回空 payload
-- `PreCompact`
-  在上下文压缩前刷新 working-tree 派生导航信息
-- `Stop`
-  在每次回复后记录轻量 HEAD 标记
-- `SessionEnd`
-  在会话结束时再落一次最终 HEAD 标记，并把 transcript 总结任务 enqueue 到
-  `<repo-memory>/jobs/session-summary/pending/`。`install-hooks` 会扫描本地工具并写入
-  `~/.dev-memory/config.json` 的 `session_summary.command`（优先 coco，其次 codex，再 claude）。hook 会启动后台 worker，先生成
-  `<repo-memory>/jobs/session-summary/inputs/*.json`，再把已提取的 core messages 和 existing memory
-  内联进 `{prompt}`。agent 只输出 summary-output JSON，不调用 CLI；worker 负责 JSON 校验、同 session 最多 3 次重试、落盘和 pending/done/skipped/failed 迁移；无 touched targets 的空总结进入 `skipped/`，不算真实落盘。hook 不等待总结完成。`DEV_MEMORY_SESSION_SUMMARY_CMD` 仅作临时 override，禁用用
-  `DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT=1`
+## 会话总结
 
-## 和 ECC 的差异
+### 生效范围
 
-ECC 是插件形态，安装后可以靠插件机制自动加载 hook 配置。
+`SessionEnd` 自动总结仅由 **Claude Code CLI** 的生命周期事件触发。Codex CLI hook 模板没有 `SessionEnd`；它的 `Stop` 只登记候选，不在每轮回答后启动模型。Codex Desktop 不使用这组项目 hook。
 
-这个仓库当前是 skill suite，不是独立 Claude 插件，所以：
+总结任务的触发端与执行端是两个独立概念：
 
-- 对本仓库自身开发：
-  - Claude 把 [hooks/hooks.json](hooks.json) 合并到本地 `.claude/settings.local.json`
-  - Codex 把 [hooks/codex-hooks.json](codex-hooks.json) 放到或合并到本地 `.codex/hooks.json`
-- 对其他仓库：
-  - 先安装 `dev-memory-cli`
-  - 再把模板 merge 到对应 repo-local 配置
-  - hook 运行时统一走 `dev-memory-cli hook ...`
-- 不能假装成“像插件一样对所有仓库自动加载”
+- **触发端**：Claude Code CLI 的 `SessionEnd` hook。
+- **执行端**：本机可用的 `coco`、`codex` 或 `claude` CLI。
+
+因此，执行总结所用的 CLI 与产生原会话的客户端没有绑定关系。
+
+### 总结工具选择
+
+`install-hooks` 检测本地命令并初始化 `~/.dev-memory/config.json`。已有非空 `session_summary.command` 时保留现有配置，否则按以下顺序选择第一个可用工具：
+
+单独执行 `install-hooks codex` 也会初始化这项 CLI 配置，但不会为 Codex CLI 增加 `SessionEnd` 事件；没有 Claude Code `SessionEnd` 或其它显式 enqueue 来源时，该配置不会自动启动总结任务。
+
+| 优先级 | 工具 | 默认命令 |
+| --- | --- | --- |
+| 1 | `coco` | `coco -p --yolo --session-id {summary_session_id} {prompt}` |
+| 2 | `codex` | `codex exec --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox danger-full-access {prompt}` |
+| 3 | `claude` | `claude -p --permission-mode bypassPermissions --session-id {summary_session_uuid} {prompt}` |
+
+示例配置：
+
+```json
+{
+  "session_summary": {
+    "provider": "codex",
+    "command": "codex exec --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox danger-full-access {prompt}",
+    "max_attempts": 3
+  }
+}
+```
+
+该机制依赖本地 CLI 命令，模型、账号和认证配置沿用被选 CLI；dev-memory 不直接集成 provider HTTP API。`session_summary.command` 支持自定义其它命令，`DEV_MEMORY_SESSION_SUMMARY_CMD` 提供进程级临时 override；`DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT=1` 禁用后台总结执行。
+
+### 总结作用
+
+`SessionEnd` 总结用于从一次会话中提取对后续开发仍然有效的语义信息，而不是保存 transcript 副本或生成 changelog。处理流程如下：
+
+1. `SessionEnd` 记录最终 HEAD，并把 job 写入 `<repo-memory>/jobs/session-summary/pending/`。
+2. worker 从 transcript 中提取核心 user/assistant 文本，并加载现有 branch/repo 记忆。
+3. 总结 CLI 只生成 summary-output JSON，不直接调用 dev-memory 命令。
+4. worker 校验 JSON，最多重试 `max_attempts` 次，再通过代码应用结构化 patch。
+5. job 根据结果移动到 `done/`、`skipped/` 或 `failed/`。
+
+允许写入或修正的内容包括：
+
+- decisions、risks、glossary
+- 功能文件索引 `file_map`
+- repo 级 shared decisions、context、sources
+- 已有 entry 的 rewrite 或 delete
+
+以下内容不会写入：
+
+- 工具调用流水账、system 消息、reasoning
+- 完整 transcript 或提交历史副本
+- “当前进展”“下一步”“当前阶段”等时效性状态
+- 与现有记忆相比没有有效变化的内容
+
+无有效变化的 job 进入 `skipped/`，不会刷新 capture manifest，也不计为真实记忆写入。hook 采用后台执行，不等待总结完成。
+
+## Codex 定时扫描
+
+Codex CLI 和 Desktop 共用本地 rollout 文件：
+
+```text
+~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+~/.codex/archived_sessions/
+```
+
+安装 macOS LaunchAgent：
+
+```bash
+dev-memory-cli session-scan install
+dev-memory-cli session-scan status
+```
+
+任务默认每天本地时间 03:00 运行。首次扫描只回看最近 3 天；后续使用持久化字节游标补扫上次成功处理后产生的全部数据。`install-hooks codex` 与 `session-scan install` 相互独立。
+
+扫描器只提取尚未处理的 user/assistant 语义消息，不限制消息数量，也不截断单条消息。材料超过单次模型上下文时按顺序分块，每个分块都进入中间摘要，再结合现有 memory 生成最终结构化结果。游标只在最终结果成功应用后推进。
+
+### 执行器配置
+
+`~/.dev-memory/config.json` 中的 `session_scan` 独立配置扫描执行器。默认提供 `coco`、`codex`、`claude` 三个 preset，并按顺序选择第一个已安装且启用的命令：
+
+```json
+{
+  "session_scan": {
+    "executor": "auto",
+    "order": ["coco", "codex", "claude"],
+    "chunk_chars": 60000,
+    "idle_minutes": 60,
+    "first_lookback_days": 3,
+    "executors": {
+      "coco": {"enabled": true, "command": "coco", "model": null, "profile": null, "extra_args": [], "env": {}},
+      "codex": {"enabled": true, "command": "codex", "model": null, "profile": null, "extra_args": [], "env": {}},
+      "claude": {"enabled": true, "command": "claude", "model": null, "profile": null, "extra_args": [], "env": {}}
+    }
+  }
+}
+```
+
+`model` 由内置适配器转换为对应 CLI 参数。`profile`、`extra_args` 和 `env` 用于选择账号、模型供应商、本地 provider 或代理。也可以增加自定义 preset；自定义命令需要自行保证结构化 JSON 输出。
+
+```bash
+dev-memory-cli session-scan config show
+dev-memory-cli session-scan config set-executor codex
+dev-memory-cli session-scan config set-model codex <model>
+dev-memory-cli session-scan config set-profile codex <profile>
+dev-memory-cli session-scan config validate
+```
+
+`auto` 只在命令不存在或 preset 被禁用时选择下一个执行器。模型调用失败不会自动换供应商，以免重复产生不可控费用。
+
+### 递归防护
+
+Codex preset 固定使用 `codex exec --ephemeral --json`，总结调用不会写入新的 rollout。扫描器还会登记内部 session/thread ID，并排除 `dev-memory-summary-` session 和带内部 prompt marker 的会话。即使自定义执行器产生持久化会话，也不会被下一轮当成业务会话重复总结。
+
+### 账本与用量
+
+```text
+~/.dev-memory/jobs/session-scan/
+  candidates/                    # Codex Stop 登记
+  state/                         # 会话字节游标
+  sessions/                      # 原始大小、分块和用量摘要
+  runs/                          # 每次扫描记录
+  logs/                          # LaunchAgent stdout/stderr
+  events.jsonl
+  internal-sessions.jsonl
+```
+
+每个 run 记录原文件大小、本轮新增字节、语义消息和字符数、原会话累计 token、每次总结调用的执行器/模型/耗时/token，以及成功、跳过和失败状态。执行器没有返回 usage 时写为 `unavailable`，不会伪装成 0。
+
+```bash
+dev-memory-cli session-scan run --dry-run --json
+dev-memory-cli session-scan run
+dev-memory-cli session-scan stats --json
+dev-memory-cli session-scan history --limit 20
+dev-memory-cli session-scan show <run-id>
+dev-memory-cli session-scan uninstall
+```
+
+`dev-memory-cli ui` 的“会话扫描”视图读取同一账本，展示仓库扫描次数、会话数量、原始大小、新增数据量和每次总结 token。
+
+## 接入边界
+
+这个仓库是 skill suite，不是自动注入所有项目的独立插件：
+
+- Claude 把 [hooks/hooks.json](hooks.json) 合并到 `.claude/settings.local.json`。
+- Codex CLI 把 [hooks/codex-hooks.json](codex-hooks.json) 合并到 `.codex/hooks.json`。
+- Codex Desktop 通过本地 rollout 定时扫描覆盖，不依赖项目 hook。
+- 其他仓库需要先安装 CLI，再安装对应 hook；hook 运行时统一调用 `dev-memory-cli hook ...`。
 
 ## 原则
 

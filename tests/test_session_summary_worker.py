@@ -10,6 +10,19 @@ if str(HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(HOOKS_DIR))
 
 from session_summary_worker import run_worker  # noqa: E402
+from session_summary_worker import _agent_args  # noqa: E402
+
+
+def test_codex_worker_command_forces_ephemeral():
+    args = _agent_args(
+        "codex exec --json {prompt}",
+        prompt="prompt",
+        job_path=Path("/tmp/job.json"),
+        summary_input_path=Path("/tmp/input.json"),
+        summary_session_id="summary",
+        summary_session_uuid="uuid",
+    )
+    assert args[:3] == ["codex", "exec", "--ephemeral"]
 
 
 def _write_job(branch, transcript):

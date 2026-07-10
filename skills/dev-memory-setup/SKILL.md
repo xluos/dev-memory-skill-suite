@@ -5,15 +5,15 @@ description: 把 unsorted.md 里未分类内容整理到结构化文件。触发
 
 # Dev Memory Setup
 
-在 v2 里，setup **不再是前置门禁**。任何 `dev-memory-capture` 写入都会自动把骨架建起来，内容先落到 unsorted.md（如果 heuristic 不确定）或直接落到对应分类文件。
+Setup 不是写入前置门禁。任何 `dev-memory-capture` 写入都会自动把骨架建起来；能够明确分类的内容直接落到对应文件，不确定的内容进入 `unsorted.md`。
 
-Setup 的新职责是一个 **promotion 动作**：
+Setup 的职责是整理未分类内容：
 
 1. 读 unsorted.md 里 lazy init 期间积累的未分类条目
-2. 和用户一起按 decisions/progress/risks/glossary 分类
+2. 和用户一起按 decisions/risks/glossary/source 分类
 3. merge 到目标文件，清空 unsorted.md
 4. 收集仍然缺的元信息（目标、范围、阶段、约束、源资料入口）
-5. 标 `manifest.setup_completed = true`，此后 capture 的 heuristic 默认从 unsorted 兜底切到 progress 兜底
+5. 标 `manifest.setup_completed = true`
 
 **Workspace mode：** 始终针对单个仓库。cwd 是多 repo workspace 时，必须通过 `--repo <basename>` 明确指定目标仓库。
 
@@ -58,8 +58,6 @@ npx dev-memory-cli setup init \
 | Kind | 去哪里 |
 |---|---|
 | `decision` | branch/decisions.md "关键决策与原因" |
-| `progress` | branch/progress.md "当前进展" |
-| `next` | branch/progress.md "下一步" |
 | `risk` | branch/risks.md "阻塞与注意点" |
 | `glossary` | branch/glossary.md "当前有效上下文" |
 | `source` | branch/glossary.md "分支源资料入口" |
@@ -102,13 +100,12 @@ setup 之后仍可能有空模板，走 capture 填：
 
 - `--kind overview` → 当前目标
 - `--kind scope` → 范围边界
-- `--kind stage` → 当前阶段
 - `--kind constraint` → 关键约束
 - `--kind shared-source` → 共享源文档入口
 
 ### 只标完成不整理（极简路径）
 
-如果 unsorted 是空的，但你想切换默认分类策略（从"不确定 → unsorted"切到"不确定 → progress"），直接跑：
+如果 `unsorted.md` 是空的，但需要明确标记 setup 已完成，可以直接跑：
 
 ```bash
 npx dev-memory-cli setup mark-completed \
@@ -128,10 +125,10 @@ npx dev-memory-cli setup mark-completed \
 
 - 先跑 init 看 unsorted_entries
 - merge 时尊重用户选择的分类，不擅自修改
-- setup_completed = true 后告诉用户 heuristic 兜底已切换
+- setup 完成后说明本次合并结果与仍未分类的内容
 
 **Never:**
 
-- 拒绝写入（v2 capture 永远 lazy init；如果 setup 没跑过，capture 会用 unsorted 兜底）
+- 拒绝写入（capture 会 lazy init；无法明确分类时使用 unsorted 兜底）
 - 继续复制整份 prd/review/frontend/backend/test 正文
 - 把仓库工作区当成本地记忆主目录

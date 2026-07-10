@@ -5,13 +5,19 @@ from _common import (
     is_workspace_mode,
     log,
     maybe_record_head,
+    read_hook_input,
     record_head_all_repos,
+    register_session_scan_candidate,
     resolve_assets,
 )
 
 
 def main():
+    hook_input = read_hook_input()
     try:
+        candidate = register_session_scan_candidate(hook_input)
+        if candidate:
+            log(f"[dev-memory][Stop] registered session scan candidate {candidate}")
         if is_no_git_mode():
             log("[dev-memory][Stop] no-git mode: nothing to record (no HEAD)")
             return 0

@@ -24,7 +24,7 @@
             "timeout": 15
           }
         ],
-        "description": "Persist lightweight HEAD markers after each response",
+        "description": "Persist HEAD markers and register the session for scheduled scanning",
         "id": "dev-memory:stop"
       }
     ]

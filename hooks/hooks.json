@@ -24,7 +24,7 @@
             "timeout": 20
           }
         ],
-        "description": "Refresh working-tree-derived navigation before compaction",
+        "description": "Compatibility no-op; SessionStart handles working-tree refresh",
         "id": "dev-memory:pre-compact"
       }
     ],

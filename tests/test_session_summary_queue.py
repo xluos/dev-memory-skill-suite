@@ -75,6 +75,7 @@ def test_build_summary_prompt_embeds_job_path():
     assert "/tmp/job.json" in prompt
     assert "/tmp/input.json" in prompt
     assert "SUMMARY_INPUT_JSON" in prompt
+    assert "DEV_MEMORY_INTERNAL_SESSION_SUMMARY_V1" in prompt
     assert "不要调用 `dev-memory-cli summary extract-core`" in prompt
     assert "dev-memory-cli summary extract-core \"" not in prompt
     assert "repo 共享层淘汰规则" in prompt
@@ -149,6 +150,27 @@ def test_summary_input_core_messages_are_role_text_only(tmp_path, monkeypatch):
     ]
     assert set(extracted["core_messages"][0]) == {"role", "text"}
     assert set(extracted["stats"]) == {"core_message_count", "returned_core_message_count"}
+
+
+def test_summary_input_keeps_all_messages_and_full_text(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEV_MEMORY_DISABLE_SESSION_SUMMARY_AGENT", "1")
+    transcript = tmp_path / "session.jsonl"
+    long_text = "完整内容" * 1000
+    rows = []
+    for index in range(45):
+        rows.append(json.dumps({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": f"{index}:{long_text}"}]},
+        }, ensure_ascii=False))
+    transcript.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    payload = _payload(tmp_path)
+    queued = enqueue_session_summary_job(payload, {"session_id": "full", "transcript_path": str(transcript)})
+
+    extracted = build_summary_input(queued["job_path"])
+
+    assert len(extracted["core_messages"]) == 45
+    assert extracted["core_messages"][0]["text"] == f"0:{long_text}"
+    assert extracted["core_messages"][-1]["text"] == f"44:{long_text}"
 
 
 def test_summary_input_memory_entries_are_named_content_only(tmp_path, monkeypatch):

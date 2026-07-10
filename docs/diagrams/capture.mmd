@@ -1,37 +1,48 @@
-flowchart TD
-  IN["capture record<br/>--content &lt;text&gt;"]:::input --> KIND{"指定 --kind?"}
-  KIND -->|是| EXP[按 kind 直接路由]:::explicit
-  KIND -->|否| HEUR[classify_content<br/>heuristic 正则]:::auto
+flowchart TB
+  EXPLICIT[显式 kind]
+  AUTO[自动分类<br/>decision / risk / glossary / unsorted]
+  BATCH[结构化批量输入]
+  ROUTE[按 kind 路由到文件与 section]
 
-  HEUR --> H1{内容特征}
-  H1 -->|"结论 / 决定 / 改为 / 采用"| K1[decision]:::kind
-  H1 -->|"阻塞 / 注意 / 坑 / 失败"| K2[risk]:::kind
-  H1 -->|"即 / 指的是 / http / 术语"| K3[glossary]:::kind
-  H1 -->|"当前 / 已完成 / commit"| K4[progress]:::kind
-  H1 -->|"都不中 + 未 setup"| K5[unsorted 兜底]:::fallback
-  H1 -->|"都不中 + 已 setup"| K4
+  APPEND[append 型知识<br/>decision / risk / glossary / source / shared-*]
+  UPSERT[upsert 型快照<br/>overview / scope / constraint / filemap]
+  FALLBACK[待分类与候选<br/>unsorted / pending]
 
-  EXP --> APPLY
-  K1 --> APPLY
-  K2 --> APPLY
-  K3 --> APPLY
-  K4 --> APPLY
-  K5 --> APPLY
+  DEDUP{存在相似 entry?}
+  WRITE[写入目标文件]
+  REVIEW[读取候选<br/>rewrite / delete / force / skip]
+  CROSS{可跨分支复用?}
+  STAGE[pending-promotion.md]
+  DONE[更新 manifest 与 log]
 
-  APPLY["按 kind 的 default_mode<br/>选 append / upsert"] --> MAIN[写入主文件]:::main
+  EXPLICIT --> ROUTE
+  AUTO --> ROUTE
+  BATCH --> ROUTE
+  ROUTE --> APPEND
+  ROUTE --> UPSERT
+  ROUTE --> FALLBACK
+  APPEND --> DEDUP
+  DEDUP -->|否| WRITE
+  DEDUP -->|是| REVIEW
+  REVIEW --> WRITE
+  UPSERT --> WRITE
+  FALLBACK --> WRITE
+  WRITE --> CROSS
+  CROSS -->|是| STAGE
+  CROSS -->|否| DONE
+  STAGE --> DONE
 
-  APPLY --> CROSS{is_cross_branch<br/>_candidate?}
-  CROSS -->|"无分支名 token<br/>+ 含经验/模式/通用"| PEND[append 到<br/>pending-promotion.md]:::staging
-  CROSS -->|否| SKIP[仅主写入]
-
-  MAIN --> END([完成])
-  PEND --> END
-  SKIP --> END
-
-  classDef input fill:#e3f2fd,stroke:#1976d2
-  classDef explicit fill:#fff3e0,stroke:#e65100
-  classDef auto fill:#fff3e0,stroke:#e65100
-  classDef kind fill:#f3e5f5,stroke:#6a1b9a
-  classDef fallback fill:#fce4ec,stroke:#c2185b
-  classDef main fill:#e8f5e9,stroke:#388e3c
-  classDef staging fill:#fffde7,stroke:#f57f17
+  classDef input fill:#dbeafe,stroke:#2563eb,color:#172554
+  classDef route fill:#ede9fe,stroke:#7c3aed,color:#2e1065
+  classDef append fill:#ecfeff,stroke:#0891b2,color:#083344
+  classDef snapshot fill:#dcfce7,stroke:#16a34a,color:#052e16
+  classDef fallback fill:#fef3c7,stroke:#d97706,color:#451a03
+  classDef action fill:#ffffff,stroke:#64748b,color:#0f172a
+  classDef stage fill:#f3e8ff,stroke:#9333ea,color:#3b0764
+  class EXPLICIT,AUTO,BATCH input
+  class ROUTE route
+  class APPEND append
+  class UPSERT snapshot
+  class FALLBACK fallback
+  class DEDUP,WRITE,REVIEW,CROSS,DONE action
+  class STAGE stage

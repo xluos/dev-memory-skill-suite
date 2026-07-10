@@ -151,6 +151,9 @@ def _agent_args(command, *, prompt, job_path, summary_input_path, summary_sessio
         )
     if "{prompt}" not in command:
         args.append(prompt)
+    executable = Path(args[0]).name if args else ""
+    if executable == "codex" and "exec" in args and "--ephemeral" not in args:
+        args.insert(args.index("exec") + 1, "--ephemeral")
     return args
 
 

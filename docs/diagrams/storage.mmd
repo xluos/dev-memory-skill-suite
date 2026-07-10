@@ -1,29 +1,45 @@
-flowchart TD
-  ROOT["~/.dev-memory/repos/&lt;repo-key&gt;/"] --> SHARED["repo/<br/>共享层"]
-  ROOT --> BRANCHES["branches/"]
+flowchart TB
+  CODEX[~/.codex/sessions/<br/>rollout JSONL]
+  SCAN[~/.dev-memory/jobs/<br/>session-scan/<br/>state / sessions / runs / logs]
+  ROOT[~/.dev-memory/repos/<br/>&lt;repo-key&gt;/]
+  REPO[repo/<br/>跨分支共享层]
+  BRANCHES[branches/]
+  ACTIVE[&lt;branch-key&gt;/<br/>当前分支层]
+  ARCHIVE[_archived/<br/>已归档分支]
 
-  SHARED --> SM[manifest.json]
-  SHARED --> SO["overview.md<br/>长期目标 + 约束"]
-  SHARED --> SD["decisions.md<br/>跨分支通用决策"]
-  SHARED --> SG["glossary.md<br/>共享入口 + 长期背景"]
+  ROOT --> REPO
+  CODEX --> SCAN
+  SCAN --> ROOT
+  ROOT --> BRANCHES
+  BRANCHES --> ACTIVE
+  BRANCHES --> ARCHIVE
 
-  BRANCHES --> B1["&lt;branch_key&gt;/<br/>当前分支层"]
-  BRANCHES --> ARCH["_archived/<br/>归档分支"]
+  REPO --> RM[manifest.json]
+  REPO --> RO[overview.md]
+  REPO --> RD[decisions.md]
+  REPO --> RG[glossary.md]
+  REPO --> RL[log.md]
+  REPO --> RA[artifacts/]
 
-  B1 --> BM["manifest.json<br/>含 setup_completed"]
-  B1 --> BOV["overview.md<br/>冷启动摘要"]
+  ACTIVE --> BM[manifest.json]
+  ACTIVE --> BO[overview.md]
+  ACTIVE --> BP[progress.md<br/>Git 派生导航与 filemap]
+  ACTIVE --> BD[decisions.md]
+  ACTIVE --> BR[risks.md]
+  ACTIVE --> BG[glossary.md]
+  ACTIVE --> BU[unsorted.md]
+  ACTIVE --> BPP[pending-promotion.md]
+  ACTIVE --> BL[log.md]
+  ACTIVE --> BA[artifacts/history/]
 
-  B1 --> BPR["progress.md<br/>当前进展 + 自动同步区"]:::snap
-  B1 --> BRI["risks.md<br/>阻塞 + 注意点"]:::accum
-  B1 --> BDE["decisions.md<br/>结论 + Why + 影响"]:::accum
-  B1 --> BGL["glossary.md<br/>术语 + 链接"]:::accum
-
-  B1 --> BUN["unsorted.md<br/>heuristic 兜底"]:::fallback
-  B1 --> BPE["pending-promotion.md<br/>跨分支候选 staging"]:::staging
-
-  B1 --> ART["artifacts/history/"]
-
-  classDef snap fill:#e3f2fd,stroke:#1976d2
-  classDef accum fill:#e8f5e9,stroke:#388e3c
-  classDef fallback fill:#fce4ec,stroke:#c2185b
-  classDef staging fill:#fffde7,stroke:#f57f17
+  classDef root fill:#1e293b,stroke:#1e293b,color:#ffffff
+  classDef repo fill:#cffafe,stroke:#0891b2,color:#083344
+  classDef branch fill:#dcfce7,stroke:#16a34a,color:#052e16
+  classDef archive fill:#e2e8f0,stroke:#64748b,color:#0f172a
+  classDef file fill:#ffffff,stroke:#94a3b8,color:#0f172a
+  class ROOT,CODEX root
+  class SCAN repo
+  class REPO repo
+  class BRANCHES,ACTIVE branch
+  class ARCHIVE archive
+  class RM,RO,RD,RG,RL,RA,BM,BO,BP,BD,BR,BG,BU,BPP,BL,BA file

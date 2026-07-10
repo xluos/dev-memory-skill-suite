@@ -41,6 +41,7 @@ CONTEXT_SCRIPT = PACKAGE_ROOT / "lib" / "dev_memory_context.py"
 CAPTURE_SCRIPT = PACKAGE_ROOT / "lib" / "dev_memory_capture.py"
 SUMMARY_WORKER_SCRIPT = PACKAGE_ROOT / "scripts" / "hooks" / "session_summary_worker.py"
 DEFAULT_CONFIG_PATH = Path(os.environ.get("DEV_MEMORY_CONFIG_PATH", "~/.dev-memory/config.json")).expanduser()
+DEV_MEMORY_HOME = Path(os.environ.get("DEV_MEMORY_HOME", "~/.dev-memory")).expanduser()
 WORKSPACE_CONFIG_NAMES = (".dev-memory-workspace.json", ".dev-assets-workspace.json")
 
 
@@ -119,6 +120,28 @@ def read_hook_input():
         return payload if isinstance(payload, dict) else {"raw": payload}
     except Exception:
         return {"raw": raw[:4000]}
+
+
+def register_session_scan_candidate(hook_input):
+    """Persist a lightweight Codex Stop hint without starting summarization."""
+    if not isinstance(hook_input, dict):
+        return None
+    session_id = hook_session_id(hook_input)
+    transcript_path = _hook_transcript_path(hook_input)
+    if not session_id and not transcript_path:
+        return None
+    source = session_id or transcript_path
+    digest = hashlib.sha1(str(source).encode("utf-8")).hexdigest()[:20]
+    path = DEV_MEMORY_HOME / "jobs" / "session-scan" / "candidates" / f"{digest}.json"
+    _atomic_write_json(path, {
+        "schema_version": 1,
+        "event": "Stop",
+        "registered_at": now_iso(),
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "cwd": _first_string(hook_input.get("cwd"), str(REPO_ROOT)),
+    })
+    return path
 
 
 def resolve_assets_for(repo_root):
@@ -219,7 +242,7 @@ def extract_section(path, title):
     return None if is_placeholder(body) else body
 
 
-def extract_repo_file_body(path):
+def extract_repo_file_body(path, *, newest_first=False):
     """Extract full body of a repo-level file, skipping the H1 title and
     ``## 仓库`` metadata section. Placeholder-only sections within the file
     are dropped individually so that real content in sibling sections is
@@ -235,6 +258,11 @@ def extract_repo_file_body(path):
     for sec in sections:
         sec_body = strip_managed_markers(sec).strip()
         if sec_body and not is_placeholder(sec_body):
+            if newest_first and sec_body.startswith("## "):
+                heading, separator, body = sec_body.partition("\n")
+                if separator and body.strip():
+                    blocks = _split_recent_blocks(body)
+                    sec_body = heading + "\n\n" + "\n\n".join(blocks)
             kept.append(sec_body)
     body = "\n\n".join(kept).strip()
     return body or None
@@ -443,11 +471,14 @@ def _brief_section_keys(profile):
     return tuple(_BRIEF_PROFILES.get(profile, _BRIEF_PROFILES["standard"]).keys())
 
 
-def _extract_sections(paths, keys):
+def _extract_sections(paths, keys, *, repo_newest_first=False):
     out = []
     for file_key, title in keys:
         if title is None:
-            body = extract_repo_file_body(paths[file_key])
+            body = extract_repo_file_body(
+                paths[file_key],
+                newest_first=repo_newest_first and file_key in {"repo_decisions", "repo_glossary"},
+            )
             display_title = _REPO_DISPLAY_TITLES.get(file_key, paths[file_key].stem)
         else:
             body = extract_section(paths[file_key], title)
@@ -471,7 +502,7 @@ def _build_context_from_assets(assets, *, full=True, heading=None, brief_profile
 
     paths = assets["paths"]
     keys = _FULL_SECTION_KEYS if full else _brief_section_keys(brief_profile)
-    sections = _extract_sections(paths, keys)
+    sections = _extract_sections(paths, keys, repo_newest_first=full)
     max_lines, max_chars = (8, 700) if full else (3, 200)
     brief_limits = _BRIEF_PROFILES.get(brief_profile, _BRIEF_PROFILES["standard"])
 
@@ -898,9 +929,14 @@ def build_summary_input(job_path):
     job = json.loads(Path(job_path).read_text(encoding="utf-8"))
     return extract_core_payload(
         job,
-        max_messages=_int_env("DEV_MEMORY_SESSION_SUMMARY_MAX_MESSAGES", 30),
-        max_message_chars=_int_env("DEV_MEMORY_SESSION_SUMMARY_MAX_MESSAGE_CHARS", 1600),
+        max_messages=_int_env("DEV_MEMORY_SESSION_SUMMARY_MAX_MESSAGES", 0),
+        max_message_chars=_int_env("DEV_MEMORY_SESSION_SUMMARY_MAX_MESSAGE_CHARS", 0),
         max_memory_chars=_int_env("DEV_MEMORY_SESSION_SUMMARY_MAX_MEMORY_CHARS", 4000),
+        since_size=(
+            ((job.get("previous_job") or {}).get("processed") or {}).get("transcript_size", 0)
+            if isinstance(job.get("previous_job"), dict)
+            else 0
+        ),
     )
 
 
@@ -918,7 +954,8 @@ def build_summary_prompt(job_path, summary_input=None, summary_input_path=None):
         summary_input = build_summary_input(job_path)
     summary_input_json = json.dumps(summary_input, ensure_ascii=False, indent=2)
     input_path_line = f"- summary input JSON: {summary_input_path}\n" if summary_input_path else ""
-    return f"""你是 dev-memory 的后台会话总结 worker。
+    return f"""DEV_MEMORY_INTERNAL_SESSION_SUMMARY_V1
+你是 dev-memory 的后台会话总结 worker。
 
 输入：
 - job JSON: {job_path}

@@ -6,7 +6,7 @@ lazy-inits files on first write. Setup's job is now:
 
   1. Ensure skeleton exists (idempotent).
   2. Scan unsorted.md and present each entry to the user for classification.
-  3. Route user's choices into decisions/progress/risks/glossary/shared-*.
+  3. Route user's choices into decisions/risks/glossary/shared-*.
   4. Mark manifest.setup_completed = true.
 """
 
@@ -92,7 +92,7 @@ def command_init(args):
 # plan.json format:
 # {
 #   "classifications": [
-#     {"entry": "original bullet text", "kind": "decision|progress|next|risk|glossary|source|shared-*|skip"},
+#     {"entry": "original bullet text", "kind": "decision|risk|glossary|source|shared-*|skip"},
 #     ...
 #   ],
 #   "clear_unsorted_on_done": true
@@ -138,7 +138,12 @@ def _apply_classifications(paths, classifications):
         from dev_memory_common import append_to_section
         body = "\n".join(f"- {e}" for e in entries)
         path = paths[file_key]
-        append_to_section(path, section, body)
+        append_to_section(
+            path,
+            section,
+            body,
+            max_entries=20 if file_key.startswith("repo_") else None,
+        )
         tally[f"{file_key}:{section}"] = len(entries)
     return {"applied": tally, "skipped": skipped}
 

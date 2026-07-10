@@ -1,242 +1,96 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1280" width="1200" height="1280">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#fafbfc"/>
-      <stop offset="100%" stop-color="#eef2f7"/>
-    </linearGradient>
-    <linearGradient id="header-grad" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#1e293b"/>
-      <stop offset="100%" stop-color="#475569"/>
-    </linearGradient>
-    <linearGradient id="input-grad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#dbeafe"/>
-      <stop offset="100%" stop-color="#bfdbfe"/>
-    </linearGradient>
-    <linearGradient id="end-grad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#a7f3d0"/>
-      <stop offset="100%" stop-color="#6ee7b7"/>
-    </linearGradient>
-
-    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="4"/>
-      <feOffset dx="0" dy="3"/>
-      <feComponentTransfer><feFuncA type="linear" slope="0.18"/></feComponentTransfer>
-      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .title { font-size: 30px; font-weight: 700; fill: #fff; }
+      .subtitle { font-size: 15px; fill: #cbd5e1; }
+      .section { font-size: 15px; font-weight: 700; fill: #334155; }
+      .box-title { font-size: 17px; font-weight: 700; fill: #0f172a; }
+      .box-copy { font-size: 13px; fill: #475569; }
+      .small { font-size: 12px; fill: #64748b; }
+    </style>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.10"/>
     </filter>
-
-    <filter id="soft-shadow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
-      <feOffset dx="0" dy="1"/>
-      <feComponentTransfer><feFuncA type="linear" slope="0.12"/></feComponentTransfer>
-      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-
-    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
-    </marker>
-    <marker id="arr-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/>
     </marker>
   </defs>
 
-  <rect width="1200" height="1280" fill="url(#bg)"/>
+  <rect width="1400" height="900" fill="#f8fafc"/>
+  <rect x="40" y="32" width="1320" height="100" rx="8" fill="#1e293b"/>
+  <text class="ui title" x="72" y="78">Capture 写入路由</text>
+  <text class="ui subtitle" x="72" y="108">显式语义优先 · 模糊内容保守兜底 · 纠错时改写原 entry</text>
+  <text class="mono subtitle" x="1328" y="84" text-anchor="end">dev-memory-cli capture</text>
 
-  <!-- Header -->
-  <rect x="40" y="30" width="1120" height="74" rx="14" fill="url(#header-grad)" filter="url(#shadow)"/>
-  <text x="70" y="68" font-size="22" font-weight="700" fill="#f8fafc">Capture Record · 写入决策流</text>
-  <text x="70" y="92" font-size="13" fill="#cbd5e1">heuristic 分类 → kind 路由 → cross-branch 判定 → 主文件 + pending-promotion</text>
-  <text x="1130" y="68" font-size="13" fill="#a5b4fc" text-anchor="end" font-family="ui-monospace,monospace">dev-memory-cli capture record</text>
-  <text x="1130" y="92" font-size="11" fill="#64748b" text-anchor="end" font-style="italic">统一写入入口 · 合并 sync + update</text>
-
-  <!-- ============ INPUT ============ -->
-  <g transform="translate(420, 140)">
-    <rect x="0" y="0" width="360" height="74" rx="14" fill="url(#input-grad)" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
-    <text x="180" y="32" font-size="16" font-weight="700" fill="#1e3a8a" text-anchor="middle">capture record</text>
-    <text x="180" y="56" font-size="13" font-family="ui-monospace,monospace" fill="#1e40af" text-anchor="middle">--content &lt;text&gt;  [--kind X]  [--mode]</text>
+  <text class="ui section" x="56" y="176">输入</text>
+  <line x1="102" y1="171" x2="1344" y2="171" stroke="#cbd5e1" stroke-dasharray="4 5"/>
+  <g filter="url(#shadow)">
+    <rect x="80" y="202" width="350" height="104" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <rect x="525" y="202" width="350" height="104" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <rect x="970" y="202" width="350" height="104" rx="8" fill="#dbeafe" stroke="#2563eb"/>
   </g>
+  <text class="ui box-title" x="104" y="238">显式 kind</text>
+  <text class="mono box-copy" x="104" y="267">record --kind decision ...</text>
+  <text class="ui small" x="104" y="290">最准确，直接选择目标文件与 section</text>
+  <text class="ui box-title" x="549" y="238">自动分类</text>
+  <text class="mono box-copy" x="549" y="267">record --auto --content ...</text>
+  <text class="ui small" x="549" y="290">decision / risk / glossary；否则 unsorted</text>
+  <text class="ui box-title" x="994" y="238">结构化批量输入</text>
+  <text class="mono box-copy" x="994" y="267">--summary-json / apply-summary-output</text>
+  <text class="ui small" x="994" y="290">一次会话可产生多项独立写入</text>
 
-  <!-- ============ DECISION 1: --kind 指定？ ============ -->
-  <g transform="translate(540, 250)">
-    <polygon points="0,60 120,0 240,60 120,120" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
-    <text x="120" y="55" font-size="14" font-weight="700" fill="#92400e" text-anchor="middle">--kind 指定？</text>
-    <text x="120" y="78" font-size="11" fill="#b45309" text-anchor="middle">用户/调用方明确分类</text>
+  <path d="M255 306 V350 H700" fill="none" stroke="#64748b" stroke-width="2"/>
+  <path d="M700 306 V350" fill="none" stroke="#64748b" stroke-width="2"/>
+  <path d="M1145 306 V350 H700" fill="none" stroke="#64748b" stroke-width="2"/>
+  <path d="M700 350 V382" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="500" y="398" width="400" height="72" rx="8" fill="#ede9fe" stroke="#7c3aed" filter="url(#shadow)"/>
+  <text class="ui box-title" x="528" y="428">按 kind 路由</text>
+  <text class="ui box-copy" x="528" y="454">确定 scope、文件、section 与 append/upsert 模式</text>
+
+  <path d="M700 470 V510" fill="none" stroke="#64748b" stroke-width="2"/>
+  <path d="M225 510 H1175" fill="none" stroke="#64748b" stroke-width="2"/>
+  <path d="M225 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M540 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M860 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M1175 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="72" y="554" width="306" height="140" rx="8" fill="#ecfeff" stroke="#0891b2"/>
+    <rect x="387" y="554" width="306" height="140" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+    <rect x="702" y="554" width="306" height="140" rx="8" fill="#fef3c7" stroke="#d97706"/>
+    <rect x="1017" y="554" width="311" height="140" rx="8" fill="#f3e8ff" stroke="#9333ea"/>
   </g>
+  <text class="ui box-title" x="96" y="590">append 型知识</text>
+  <text class="mono box-copy" x="96" y="620">decision · risk · glossary · source</text>
+  <text class="mono box-copy" x="96" y="646">shared-decision/context/source</text>
+  <text class="ui small" x="96" y="674">写前相似度检查；命中时先 review</text>
+  <text class="ui box-title" x="411" y="590">upsert 型快照</text>
+  <text class="mono box-copy" x="411" y="620">overview · scope · constraint</text>
+  <text class="mono box-copy" x="411" y="646">filemap · shared-overview/constraint</text>
+  <text class="ui small" x="411" y="674">替换目标 section 的当前有效状态</text>
+  <text class="ui box-title" x="726" y="590">保守兜底</text>
+  <text class="mono box-copy" x="726" y="620">unsorted</text>
+  <text class="ui box-copy" x="726" y="646">无法明确分类时不猜测长期语义</text>
+  <text class="ui small" x="726" y="674">后续由 setup 统一分类</text>
+  <text class="ui box-title" x="1041" y="590">跨分支候选</text>
+  <text class="mono box-copy" x="1041" y="620">pending-promotion.md</text>
+  <text class="ui box-copy" x="1041" y="646">通用经验额外进入候选区</text>
+  <text class="ui small" x="1041" y="674">graduate 审核后才上提 repo 层</text>
 
-  <!-- arrow input → diamond -->
-  <polyline points="600,214 600,250" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text class="ui section" x="56" y="746">落盘与纠错</text>
+  <line x1="160" y1="741" x2="1344" y2="741" stroke="#cbd5e1" stroke-dasharray="4 5"/>
+  <path d="M225 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M540 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M855 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M1172 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <!-- YES: 直接路由（左下） -->
-  <g transform="translate(80, 410)">
-    <rect x="0" y="0" width="280" height="80" rx="12" fill="white" stroke="#f97316" stroke-width="2" filter="url(#shadow)"/>
-    <rect x="0" y="0" width="6" height="80" rx="3" fill="#f97316"/>
-    <text x="22" y="32" font-size="15" font-weight="700" fill="#9a3412">按 kind 直接路由</text>
-    <text x="22" y="56" font-size="11" fill="#475569">跳过分类，按调用方意图写</text>
-    <text x="22" y="72" font-size="10" fill="#94a3b8" font-style="italic">capture record --kind decision …</text>
-  </g>
-
-  <!-- arrow YES path: diamond left → 直接路由 -->
-  <polyline points="540,310 220,310 220,410" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-  <rect x="350" y="294" width="30" height="22" rx="11" fill="white" stroke="#f59e0b" stroke-width="1"/>
-  <text x="365" y="309" font-size="11" font-weight="700" fill="#b45309" text-anchor="middle">是</text>
-
-  <!-- NO: classify_content（中下） -->
-  <g transform="translate(440, 410)">
-    <rect x="0" y="0" width="320" height="90" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="2" filter="url(#shadow)"/>
-    <rect x="0" y="0" width="6" height="90" rx="3" fill="#7c3aed"/>
-    <text x="22" y="32" font-size="15" font-weight="700" fill="#5b21b6">classify_content (heuristic)</text>
-    <text x="22" y="56" font-size="11" fill="#475569">按内容特征猜分类（正则 + 关键词）</text>
-    <text x="22" y="76" font-size="10" fill="#94a3b8" font-style="italic">没指定 --kind 时的兜底通路</text>
-  </g>
-
-  <!-- arrow NO path -->
-  <polyline points="660,370 660,410" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-  <rect x="645" y="378" width="30" height="22" rx="11" fill="white" stroke="#f59e0b" stroke-width="1"/>
-  <text x="660" y="393" font-size="11" font-weight="700" fill="#b45309" text-anchor="middle">否</text>
-
-  <!-- ============ 6 CLASSIFICATION OUTCOMES ============ -->
-  <text x="600" y="538" font-size="12" font-weight="700" fill="#475569" text-anchor="middle" letter-spacing="2">heuristic 命中类目</text>
-
-  <g transform="translate(70, 558)">
-    <!-- decision -->
-    <rect x="0" y="0" width="160" height="84" rx="10" fill="white" stroke="#06b6d4" stroke-width="1.5" filter="url(#soft-shadow)"/>
-    <rect x="0" y="0" width="5" height="84" rx="2.5" fill="#06b6d4"/>
-    <text x="80" y="26" font-size="14" font-weight="700" fill="#0e7490" text-anchor="middle">decision</text>
-    <text x="80" y="48" font-size="10" fill="#475569" text-anchor="middle">结论 / 决定 / 改为</text>
-    <text x="80" y="62" font-size="10" fill="#475569" text-anchor="middle">采用 / 选择 / 拍板</text>
-    <text x="80" y="78" font-size="9" fill="#94a3b8" font-style="italic" text-anchor="middle">→ decisions.md</text>
-
-    <!-- risk -->
-    <rect x="180" y="0" width="160" height="84" rx="10" fill="white" stroke="#ef4444" stroke-width="1.5" filter="url(#soft-shadow)"/>
-    <rect x="180" y="0" width="5" height="84" rx="2.5" fill="#ef4444"/>
-    <text x="260" y="26" font-size="14" font-weight="700" fill="#b91c1c" text-anchor="middle">risk</text>
-    <text x="260" y="48" font-size="10" fill="#475569" text-anchor="middle">注意 / 坑 / 失败</text>
-    <text x="260" y="62" font-size="10" fill="#475569" text-anchor="middle">阻塞 / 风险 / 待修</text>
-    <text x="260" y="78" font-size="9" fill="#94a3b8" font-style="italic" text-anchor="middle">→ risks.md</text>
-
-    <!-- glossary -->
-    <rect x="360" y="0" width="160" height="84" rx="10" fill="white" stroke="#06b6d4" stroke-width="1.5" filter="url(#soft-shadow)"/>
-    <rect x="360" y="0" width="5" height="84" rx="2.5" fill="#06b6d4"/>
-    <text x="440" y="26" font-size="14" font-weight="700" fill="#0e7490" text-anchor="middle">glossary</text>
-    <text x="440" y="48" font-size="10" fill="#475569" text-anchor="middle">即 / 指的是 / http</text>
-    <text x="440" y="62" font-size="10" fill="#475569" text-anchor="middle">术语 / 缩写 / 别名</text>
-    <text x="440" y="78" font-size="9" fill="#94a3b8" font-style="italic" text-anchor="middle">→ glossary.md</text>
-
-    <!-- progress -->
-    <rect x="540" y="0" width="160" height="84" rx="10" fill="white" stroke="#10b981" stroke-width="1.5" filter="url(#soft-shadow)"/>
-    <rect x="540" y="0" width="5" height="84" rx="2.5" fill="#10b981"/>
-    <text x="620" y="26" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">progress</text>
-    <text x="620" y="48" font-size="10" fill="#475569" text-anchor="middle">当前 / 已完成</text>
-    <text x="620" y="62" font-size="10" fill="#475569" text-anchor="middle">commit / 阶段进度</text>
-    <text x="620" y="78" font-size="9" fill="#94a3b8" font-style="italic" text-anchor="middle">→ progress.md</text>
-
-    <!-- unsorted -->
-    <rect x="720" y="0" width="160" height="84" rx="10" fill="white" stroke="#f59e0b" stroke-width="1.5" filter="url(#soft-shadow)"/>
-    <rect x="720" y="0" width="5" height="84" rx="2.5" fill="#f59e0b"/>
-    <text x="800" y="26" font-size="14" font-weight="700" fill="#b45309" text-anchor="middle">unsorted</text>
-    <text x="800" y="48" font-size="10" fill="#475569" text-anchor="middle">都不像 + 未 setup</text>
-    <text x="800" y="62" font-size="10" fill="#475569" text-anchor="middle">heuristic 兜底</text>
-    <text x="800" y="78" font-size="9" fill="#94a3b8" font-style="italic" text-anchor="middle">→ unsorted.md</text>
-
-    <!-- progress fallback -->
-    <rect x="900" y="0" width="160" height="84" rx="10" fill="white" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4,3" filter="url(#soft-shadow)"/>
-    <rect x="900" y="0" width="5" height="84" rx="2.5" fill="#10b981"/>
-    <text x="980" y="26" font-size="14" font-weight="700" fill="#047857" text-anchor="middle">progress</text>
-    <text x="980" y="48" font-size="10" fill="#475569" text-anchor="middle">都不像 + 已 setup</text>
-    <text x="980" y="62" font-size="10" fill="#475569" text-anchor="middle">setup 后兜底</text>
-    <text x="980" y="78" font-size="9" fill="#94a3b8" font-style="italic" text-anchor="middle">→ progress.md</text>
-  </g>
-
-  <!-- arrows from classify → 6 chips (fan out from y=500 bus) -->
-  <polyline points="600,500 600,535 150,535 150,558" fill="none" stroke="#7c3aed" stroke-width="1.3" opacity="0.5" marker-end="url(#arr-purple)"/>
-  <polyline points="600,535 330,535 330,558" fill="none" stroke="#7c3aed" stroke-width="1.3" opacity="0.5" marker-end="url(#arr-purple)"/>
-  <polyline points="600,535 510,535 510,558" fill="none" stroke="#7c3aed" stroke-width="1.3" opacity="0.5" marker-end="url(#arr-purple)"/>
-  <polyline points="600,535 690,535 690,558" fill="none" stroke="#7c3aed" stroke-width="1.3" opacity="0.5" marker-end="url(#arr-purple)"/>
-  <polyline points="600,535 870,535 870,558" fill="none" stroke="#7c3aed" stroke-width="1.3" opacity="0.5" marker-end="url(#arr-purple)"/>
-  <polyline points="600,535 1050,535 1050,558" fill="none" stroke="#7c3aed" stroke-width="1.3" opacity="0.5" marker-end="url(#arr-purple)"/>
-
-  <!-- ============ CONVERGE: default_mode ============ -->
-  <g transform="translate(380, 720)">
-    <rect x="0" y="0" width="440" height="76" rx="38" fill="white" stroke="#3b82f6" stroke-width="2" filter="url(#shadow)"/>
-    <text x="220" y="32" font-size="15" font-weight="700" fill="#1e3a8a" text-anchor="middle">按 kind 选 default_mode</text>
-    <text x="220" y="56" font-size="11" fill="#475569" text-anchor="middle" font-family="ui-monospace,monospace">append (decisions/risks/progress) · upsert (overview/glossary)</text>
-  </g>
-
-  <!-- arrows: 直接路由 + 6 outcomes → default_mode bus（聚合到 y=700） -->
-  <polyline points="220,490 220,700 600,700 600,720" fill="none" stroke="#475569" stroke-width="1.4" marker-end="url(#arr)" opacity="0.7"/>
-  <polyline points="150,642 150,700 600,700" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.5"/>
-  <polyline points="330,642 330,700 600,700" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.5"/>
-  <polyline points="510,642 510,700 600,700" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.5"/>
-  <polyline points="690,642 690,700 600,700" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.5"/>
-  <polyline points="870,642 870,700 600,700" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.5"/>
-  <polyline points="1050,642 1050,700 600,700" fill="none" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.5"/>
-
-  <!-- ============ DECISION 2: cross_branch_candidate? ============ -->
-  <g transform="translate(480, 838)">
-    <polygon points="0,60 120,0 240,60 120,120" fill="#fef3c7" stroke="#f59e0b" stroke-width="2" filter="url(#shadow)"/>
-    <text x="120" y="50" font-size="13" font-weight="700" fill="#92400e" text-anchor="middle">is_cross_branch</text>
-    <text x="120" y="68" font-size="13" font-weight="700" fill="#92400e" text-anchor="middle">_candidate?</text>
-    <text x="120" y="92" font-size="10" fill="#b45309" text-anchor="middle">无分支名 token + 含经验/通用</text>
-  </g>
-
-  <!-- arrow default_mode → diamond -->
-  <polyline points="600,796 600,838" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-
-  <!-- YES path: pending-promotion -->
-  <g transform="translate(840, 940)">
-    <rect x="0" y="0" width="280" height="80" rx="12" fill="white" stroke="#7c3aed" stroke-width="2" filter="url(#shadow)"/>
-    <rect x="0" y="0" width="6" height="80" rx="3" fill="#7c3aed"/>
-    <text x="22" y="32" font-size="14" font-weight="700" fill="#5b21b6">append → pending-promotion</text>
-    <text x="22" y="56" font-size="11" fill="#475569">同时写主文件 + cross-branch 候选</text>
-    <text x="22" y="72" font-size="10" fill="#94a3b8" font-style="italic">graduate 时一起上提到 repo/</text>
-  </g>
-
-  <polyline points="720,898 720,940 980,940" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-  <rect x="855" y="924" width="30" height="22" rx="11" fill="white" stroke="#f59e0b" stroke-width="1"/>
-  <text x="870" y="939" font-size="11" font-weight="700" fill="#b45309" text-anchor="middle">是</text>
-
-  <!-- NO path: 仅主写入 -->
-  <g transform="translate(80, 940)">
-    <rect x="0" y="0" width="280" height="80" rx="12" fill="white" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
-    <rect x="0" y="0" width="6" height="80" rx="3" fill="#10b981"/>
-    <text x="22" y="32" font-size="14" font-weight="700" fill="#047857">仅写主文件</text>
-    <text x="22" y="56" font-size="11" fill="#475569">分支级落盘 · 不进 staging</text>
-    <text x="22" y="72" font-size="10" fill="#94a3b8" font-style="italic">graduate 时不会被自动上提</text>
-  </g>
-
-  <polyline points="480,898 480,940 360,940" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-  <rect x="395" y="924" width="30" height="22" rx="11" fill="white" stroke="#f59e0b" stroke-width="1"/>
-  <text x="410" y="939" font-size="11" font-weight="700" fill="#b45309" text-anchor="middle">否</text>
-
-  <!-- ============ END ============ -->
-  <g transform="translate(500, 1080)">
-    <rect x="0" y="0" width="200" height="64" rx="32" fill="url(#end-grad)" stroke="#10b981" stroke-width="2" filter="url(#shadow)"/>
-    <text x="100" y="30" font-size="16" font-weight="700" fill="#064e3b" text-anchor="middle">完成</text>
-    <text x="100" y="50" font-size="11" fill="#047857" text-anchor="middle">artifacts/history 同步快照</text>
-  </g>
-
-  <polyline points="220,1020 220,1110 500,1110" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-  <polyline points="980,1020 980,1110 700,1110" fill="none" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-
-  <!-- ============ LEGEND ============ -->
-  <g transform="translate(80, 1190)">
-    <rect x="0" y="0" width="1040" height="60" rx="10" fill="white" stroke="#cbd5e1" stroke-width="1"/>
-    <text x="20" y="22" font-size="11" font-weight="700" fill="#475569">图例</text>
-
-    <polygon points="80,12 96,2 112,12 96,22" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
-    <text x="124" y="18" font-size="10" fill="#475569">判定节点</text>
-
-    <rect x="200" y="6" width="32" height="14" rx="2" fill="white" stroke="#475569" stroke-width="1"/>
-    <text x="244" y="18" font-size="10" fill="#475569">动作节点</text>
-
-    <line x1="320" y1="14" x2="356" y2="14" stroke="#475569" stroke-width="1.6" marker-end="url(#arr)"/>
-    <text x="368" y="18" font-size="10" fill="#475569">主流程</text>
-
-    <line x1="450" y1="14" x2="486" y2="14" stroke="#7c3aed" stroke-width="1.4" marker-end="url(#arr-purple)"/>
-    <text x="498" y="18" font-size="10" fill="#475569">heuristic 命中</text>
-
-    <line x1="610" y1="14" x2="646" y2="14" stroke="#64748b" stroke-width="1.2" stroke-dasharray="3,3"/>
-    <text x="658" y="18" font-size="10" fill="#475569">支线汇合</text>
-
-    <text x="20" y="46" font-size="10" fill="#94a3b8">capture 是 v2 唯一写入入口（合并 sync + update）。setup 之前不确定 → unsorted；之后 → progress 兜底。</text>
-  </g>
+  <rect x="72" y="790" width="1256" height="72" rx="8" fill="#fff" stroke="#64748b" filter="url(#shadow)"/>
+  <text class="ui box-title" x="96" y="821">写入目标文件，更新 manifest 与 log</text>
+  <text class="ui box-copy" x="96" y="847">append 命中旧条目时：list/find → rewrite-entry / delete-entry / force / skip</text>
+  <line x1="890" y1="804" x2="890" y2="848" stroke="#cbd5e1"/>
+  <text class="ui box-title" x="918" y="821">不保存进度流水账</text>
+  <text class="ui box-copy" x="918" y="847">progress.md 只承载 Git 派生导航与 filemap</text>
 </svg>

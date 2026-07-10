@@ -106,6 +106,29 @@ def test_session_start_frontloads_high_priority_sections(branch_dir, seed_branch
     assert high_priority_indexes[-1] < context.index("当前有效上下文:")
 
 
+def test_full_session_start_injects_newest_repo_shared_entries_first(branch_dir, seed_branch_files):
+    seed_branch_files({
+        "repo_decisions": (
+            "# 跨分支通用决策\n\n"
+            "## 仓库\n\n- test-repo\n\n"
+            "## 跨分支通用决策\n\n"
+            + "\n\n".join(f"- shared decision {idx}" for idx in range(50))
+            + "\n"
+        ),
+    })
+    assets = {
+        "branch_dir": branch_dir["branch_dir"],
+        "branch_name": branch_dir["branch_name"],
+        "paths": branch_dir["paths"],
+    }
+
+    context = _build_context_from_assets(assets, full=True)
+    shared = context.split("<shared_decisions>", 1)[1].split("</shared_decisions>", 1)[0]
+
+    assert shared.index("shared decision 49") < shared.index("shared decision 48")
+    assert "shared decision 0" not in shared
+
+
 def _workspace_brief_assets(branch_dir, seed_branch_files):
     seed_branch_files(
         {
