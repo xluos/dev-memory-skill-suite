@@ -130,7 +130,9 @@ dev-memory-cli session-scan install
 dev-memory-cli session-scan status
 ```
 
-任务默认每天本地时间 03:00 运行。首次扫描只回看最近 3 天；后续使用持久化字节游标补扫上次成功处理后产生的全部数据。`install-hooks codex` 与 `session-scan install` 相互独立。
+任务默认每天本地时间 03:00 和 13:00 运行。LaunchAgent 使用 `session-scan run --scheduled`，运行前检查 macOS HID 空闲时长；最近 10 分钟有键鼠输入时写入 `skipped_active` 记录并退出，不读取会话正文、不调用模型。检测不可用时默认保守跳过。手工执行 `session-scan run` 不启用活跃检测。
+
+首次扫描只回看最近 3 天；后续使用持久化字节游标补扫上次成功处理后产生的全部数据。`install-hooks codex` 与 `session-scan install` 相互独立。
 
 扫描器只提取尚未处理的 user/assistant 语义消息，不限制消息数量，也不截断单条消息。材料超过单次模型上下文时按顺序分块，每个分块都进入中间摘要，再结合现有 memory 生成最终结构化结果。游标只在最终结果成功应用后推进。
 
@@ -143,6 +145,10 @@ dev-memory-cli session-scan status
   "session_scan": {
     "executor": "auto",
     "order": ["coco", "codex", "claude"],
+    "schedule_times": ["03:00", "13:00"],
+    "skip_when_computer_active": true,
+    "active_within_minutes": 10,
+    "activity_check_fail_closed": true,
     "chunk_chars": 60000,
     "idle_minutes": 60,
     "first_lookback_days": 3,
@@ -162,8 +168,13 @@ dev-memory-cli session-scan config show
 dev-memory-cli session-scan config set-executor codex
 dev-memory-cli session-scan config set-model codex <model>
 dev-memory-cli session-scan config set-profile codex <profile>
+dev-memory-cli session-scan config set-schedule 03:00 13:00
+dev-memory-cli session-scan config set-active-minutes 10
+dev-memory-cli session-scan config set-active-check on
 dev-memory-cli session-scan config validate
 ```
+
+已安装定时任务时，`set-schedule` 会自动重载 LaunchAgent；活跃阈值和开关由每次运行动态读取，无需重装。
 
 `auto` 只在命令不存在或 preset 被禁用时选择下一个执行器。模型调用失败不会自动换供应商，以免重复产生不可控费用。
 

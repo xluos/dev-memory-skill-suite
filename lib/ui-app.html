@@ -743,7 +743,7 @@ function renderScan() {
       el("td", { class: "num" }, run.session_count),
       el("td", { class: "num" }, formatBytes(run.new_bytes)),
       el("td", { class: "num" }, usage == null ? "未上报" : Number(usage).toLocaleString()),
-      el("td", null, run.done_count + " 完成 · " + run.failed_count + " 失败 · " + run.skipped_count + " 跳过")
+      el("td", null, run.status ? run.status : (run.done_count + " 完成 · " + run.failed_count + " 失败 · " + run.skipped_count + " 跳过"))
     ));
   });
   runTable.appendChild(runBody);

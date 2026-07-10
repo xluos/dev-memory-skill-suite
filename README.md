@@ -81,7 +81,7 @@ dev-memory-cli session-scan install
 dev-memory-cli session-scan status
 ```
 
-扫描任务默认在本地时间 03:00 运行。`install-hooks codex` 只安装 CLI hook，不会隐式安装定时任务。
+扫描任务默认在本地时间 03:00 和 13:00 运行，时间列表可配置。LaunchAgent 触发时会读取 macOS HID 空闲时长；最近 10 分钟有键鼠输入则记录 `skipped_active` 并退出，不扫描文件或调用模型。活跃检测失败时默认保守跳过。手工执行 `session-scan run` 不受该检测影响。`install-hooks codex` 只安装 CLI hook，不会隐式安装定时任务。
 
 ## 基本使用
 
@@ -226,7 +226,11 @@ dev-memory-cli session-scan history --limit 20
 dev-memory-cli session-scan config show
 dev-memory-cli session-scan config set-executor codex
 dev-memory-cli session-scan config set-model codex <model>
+dev-memory-cli session-scan config set-schedule 03:00 13:00
+dev-memory-cli session-scan config set-active-minutes 10
 ```
+
+已安装定时任务时，`set-schedule` 会自动重载 LaunchAgent，使新的时间列表立即生效。
 
 ## 运行模式
 

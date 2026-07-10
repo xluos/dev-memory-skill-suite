@@ -97,6 +97,10 @@ def default_scan_config():
         "executor": "auto",
         "order": ["coco", "codex", "claude"],
         "executors": json.loads(json.dumps(DEFAULT_EXECUTORS)),
+        "schedule_times": ["03:00", "13:00"],
+        "skip_when_computer_active": True,
+        "active_within_minutes": 10,
+        "activity_check_fail_closed": True,
         "chunk_chars": 60000,
         "idle_minutes": 60,
         "first_lookback_days": 3,
@@ -145,7 +149,71 @@ def validate_config(config):
             errors.append("chunk_chars must be at least 1000")
     except (TypeError, ValueError):
         errors.append("chunk_chars must be an integer")
+    schedules = config.get("schedule_times")
+    if not isinstance(schedules, list) or not schedules:
+        errors.append("schedule_times must be a non-empty list")
+    else:
+        for value in schedules:
+            try:
+                _parse_schedule_time(value)
+            except ValueError as exc:
+                errors.append(str(exc))
+    try:
+        if int(config.get("active_within_minutes", 0)) < 1:
+            errors.append("active_within_minutes must be at least 1")
+    except (TypeError, ValueError):
+        errors.append("active_within_minutes must be an integer")
     return {"valid": not errors, "errors": errors, "warnings": warnings}
+
+
+def _parse_schedule_time(value):
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", str(value or "").strip())
+    if not match:
+        raise ValueError(f"invalid schedule time '{value}', expected HH:MM")
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(f"invalid schedule time '{value}', expected HH:MM")
+    return hour, minute
+
+
+def _calendar_intervals(config):
+    unique = sorted({_parse_schedule_time(value) for value in config.get("schedule_times", [])})
+    return [{"Hour": hour, "Minute": minute} for hour, minute in unique]
+
+
+def _mac_idle_seconds():
+    if sys.platform != "darwin":
+        return None
+    result = subprocess.run(
+        ["ioreg", "-c", "IOHIDSystem", "-d", "4"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    match = re.search(r'"HIDIdleTime"\s*=\s*(\d+)', result.stdout or "")
+    if not match:
+        return None
+    return int(match.group(1)) / 1_000_000_000
+
+
+def computer_activity(config):
+    threshold_seconds = int(config.get("active_within_minutes", 10)) * 60
+    idle_seconds = _mac_idle_seconds()
+    if idle_seconds is None:
+        return {
+            "status": "unknown",
+            "idle_seconds": None,
+            "threshold_seconds": threshold_seconds,
+            "skip": bool(config.get("activity_check_fail_closed", True)),
+        }
+    return {
+        "status": "active" if idle_seconds < threshold_seconds else "idle",
+        "idle_seconds": round(idle_seconds, 3),
+        "threshold_seconds": threshold_seconds,
+        "skip": idle_seconds < threshold_seconds,
+    }
 
 
 def choose_executor(config):
@@ -697,6 +765,45 @@ def discover(config, since=None):
     return sessions
 
 
+def _persist_scan_run(run, event):
+    run_id = run["run_id"]
+    _atomic_json(SCAN_ROOT / "runs" / f"{run_id}.json", run)
+    _atomic_json(SCAN_ROOT / "last-run.json", run)
+    _append_jsonl(SCAN_ROOT / "events.jsonl", {"at": now_iso(), "event": event, "run_id": run_id})
+
+
+def _skipped_activity_run(run_id, started, activity, *, dry_run=False):
+    status = "skipped_active" if activity["status"] == "active" else "skipped_activity_unknown"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "status": status,
+        "skip_reason": activity["status"],
+        "started_at": dt.datetime.fromtimestamp(started, dt.timezone.utc).isoformat(),
+        "finished_at": now_iso(),
+        "duration_ms": int((time.time() - started) * 1000),
+        "scheduled": True,
+        "dry_run": bool(dry_run),
+        "activity": activity,
+        "executor": None,
+        "model": None,
+        "profile": None,
+        "session_count": 0,
+        "candidate_count": 0,
+        "done_count": 0,
+        "failed_count": 0,
+        "skipped_count": 0,
+        "raw_bytes": 0,
+        "new_bytes": 0,
+        "semantic_messages": 0,
+        "semantic_chars": 0,
+        "summary_usage": None,
+        "usage_unavailable_invocations": 0,
+        "invocations": [],
+        "sessions": [],
+    }
+
+
 def run_scan(args):
     config = load_config()
     validation = validate_config(config)
@@ -704,6 +811,14 @@ def run_scan(args):
         raise RuntimeError("; ".join(validation["errors"]))
     run_id = dt.datetime.now().strftime("%Y%m%dT%H%M%S") + f"-{os.getpid()}"
     started = time.time()
+    activity = None
+    if getattr(args, "scheduled", False) and config.get("skip_when_computer_active", True):
+        activity = computer_activity(config)
+        if activity["skip"]:
+            run = _skipped_activity_run(run_id, started, activity, dry_run=args.dry_run)
+            _persist_scan_run(run, run["status"])
+            print(json.dumps(run, ensure_ascii=False, indent=2) if args.json else _format_run(run))
+            return 0
     origin_path = SCAN_ROOT / "scan-origin.json"
     if not origin_path.exists():
         lookback_days = int(config.get("first_lookback_days", 3))
@@ -825,6 +940,8 @@ def run_scan(args):
         "finished_at": now_iso(),
         "duration_ms": int((time.time() - started) * 1000),
         "dry_run": bool(args.dry_run),
+        "scheduled": bool(getattr(args, "scheduled", False)),
+        "activity": activity,
         "executor": executor_name,
         "model": preset.get("model") if preset else None,
         "profile": preset.get("profile") if preset else None,
@@ -842,12 +959,7 @@ def run_scan(args):
         "invocations": invocations,
         "sessions": results,
     }
-    _atomic_json(SCAN_ROOT / "runs" / f"{run_id}.json", run)
-    _atomic_json(SCAN_ROOT / "last-run.json", run)
-    _append_jsonl(SCAN_ROOT / "events.jsonl", {
-        "at": now_iso(), "event": "scan_completed", "run_id": run_id,
-        "done": run["done_count"], "failed": run["failed_count"], "skipped": run["skipped_count"],
-    })
+    _persist_scan_run(run, "scan_completed")
     print(json.dumps(run, ensure_ascii=False, indent=2) if args.json else _format_run(run))
     return 1 if run["failed_count"] else 0
 
@@ -857,6 +969,12 @@ def _format_tokens(usage):
 
 
 def _format_run(run):
+    if str(run.get("status", "")).startswith("skipped_"):
+        activity = run.get("activity") or {}
+        return (
+            f"run {run['run_id']}: {run['status']}; "
+            f"idle_seconds={activity.get('idle_seconds')} threshold={activity.get('threshold_seconds')}"
+        )
     return (
         f"run {run['run_id']}: {run['done_count']} done, {run['failed_count']} failed, "
         f"{run['skipped_count']} skipped; {run['new_bytes']} new bytes; "
@@ -930,8 +1048,8 @@ def command_install(_args):
     logs.mkdir(parents=True, exist_ok=True)
     plist = {
         "Label": "com.dev-memory.session-scan",
-        "ProgramArguments": [_cli_path(), "session-scan", "run"],
-        "StartCalendarInterval": {"Hour": 3, "Minute": 0},
+        "ProgramArguments": [_cli_path(), "session-scan", "run", "--scheduled"],
+        "StartCalendarInterval": _calendar_intervals(config),
         "RunAtLoad": False,
         "StandardOutPath": str(logs / "launchd.stdout.log"),
         "StandardErrorPath": str(logs / "launchd.stderr.log"),
@@ -944,7 +1062,14 @@ def command_install(_args):
     result = subprocess.run(["launchctl", "load", str(PLIST_PATH)], capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "launchctl load failed")
-    print(json.dumps({"installed": True, "plist": str(PLIST_PATH), "schedule": "03:00", "logs": str(logs)}, ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "installed": True,
+        "plist": str(PLIST_PATH),
+        "schedule_times": config["schedule_times"],
+        "skip_when_computer_active": config["skip_when_computer_active"],
+        "active_within_minutes": config["active_within_minutes"],
+        "logs": str(logs),
+    }, ensure_ascii=False, indent=2))
 
 
 def command_uninstall(_args):
@@ -967,6 +1092,9 @@ def command_status(_args):
         "codex_sessions": str(CODEX_HOME / "sessions"),
         "executor": executor,
         "model": preset.get("model") if preset else None,
+        "schedule_times": config.get("schedule_times"),
+        "skip_when_computer_active": config.get("skip_when_computer_active"),
+        "active_within_minutes": config.get("active_within_minutes"),
         "config": validation,
         "last_run": _read_json(SCAN_ROOT / "last-run.json"),
     }, ensure_ascii=False, indent=2))
@@ -992,7 +1120,20 @@ def command_config(args):
             raise RuntimeError(f"unknown executor preset: {args.executor}")
         field = "model" if args.config_command == "set-model" else "profile"
         config["executors"][args.executor][field] = args.value
+    elif args.config_command == "set-schedule":
+        for value in args.times:
+            _parse_schedule_time(value)
+        config["schedule_times"] = args.times
+    elif args.config_command == "set-active-minutes":
+        if args.minutes < 1:
+            raise RuntimeError("active minutes must be at least 1")
+        config["active_within_minutes"] = args.minutes
+    elif args.config_command == "set-active-check":
+        config["skip_when_computer_active"] = args.enabled == "on"
     save_scan_config(config)
+    if args.config_command == "set-schedule" and PLIST_PATH.exists():
+        command_install(args)
+        return
     print(json.dumps(config, ensure_ascii=False, indent=2))
 
 
@@ -1003,6 +1144,7 @@ def build_parser():
     run.add_argument("--since")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--json", action="store_true")
+    run.add_argument("--scheduled", action="store_true", help="Apply computer activity guard before scanning")
     sub.add_parser("install")
     sub.add_parser("status")
     stats = sub.add_parser("stats")
@@ -1026,6 +1168,12 @@ def build_parser():
         item = config_sub.add_parser(command)
         item.add_argument("executor")
         item.add_argument("value")
+    set_schedule = config_sub.add_parser("set-schedule")
+    set_schedule.add_argument("times", nargs="+")
+    set_active_minutes = config_sub.add_parser("set-active-minutes")
+    set_active_minutes.add_argument("minutes", type=int)
+    set_active_check = config_sub.add_parser("set-active-check")
+    set_active_check.add_argument("enabled", choices=("on", "off"))
     return parser
 
 

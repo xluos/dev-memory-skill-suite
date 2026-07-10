@@ -1,5 +1,6 @@
 import json
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 
@@ -114,7 +115,69 @@ def test_config_defaults_include_three_executors():
     assert config["executor"] == "auto"
     assert config["order"] == ["coco", "codex", "claude"]
     assert set(config["executors"]) == {"coco", "codex", "claude"}
+    assert config["schedule_times"] == ["03:00", "13:00"]
+    assert config["skip_when_computer_active"] is True
+    assert config["active_within_minutes"] == 10
     assert scan.validate_config(config)["valid"] is True
+
+
+def test_calendar_intervals_support_multiple_configured_times():
+    config = {**scan.default_scan_config(), "schedule_times": ["13:00", "03:00", "13:00"]}
+
+    assert scan._calendar_intervals(config) == [
+        {"Hour": 3, "Minute": 0},
+        {"Hour": 13, "Minute": 0},
+    ]
+
+
+def test_computer_activity_uses_configured_idle_threshold(monkeypatch):
+    config = {**scan.default_scan_config(), "active_within_minutes": 10}
+    monkeypatch.setattr(scan, "_mac_idle_seconds", lambda: 90)
+    assert scan.computer_activity(config)["status"] == "active"
+    assert scan.computer_activity(config)["skip"] is True
+
+    monkeypatch.setattr(scan, "_mac_idle_seconds", lambda: 900)
+    assert scan.computer_activity(config)["status"] == "idle"
+    assert scan.computer_activity(config)["skip"] is False
+
+
+def test_scheduled_scan_skips_before_discovery_when_computer_is_active(tmp_path, monkeypatch, capsys):
+    config = scan.default_scan_config()
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "load_config", lambda: config)
+    monkeypatch.setattr(scan, "computer_activity", lambda _config: {
+        "status": "active",
+        "idle_seconds": 5,
+        "threshold_seconds": 600,
+        "skip": True,
+    })
+    monkeypatch.setattr(scan, "discover", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("discover must not run")))
+
+    code = scan.run_scan(Namespace(scheduled=True, dry_run=False, json=True, since=None))
+
+    assert code == 0
+    last_run = json.loads((scan.SCAN_ROOT / "last-run.json").read_text(encoding="utf-8"))
+    assert last_run["status"] == "skipped_active"
+    assert last_run["session_count"] == 0
+    assert not (scan.SCAN_ROOT / "scan-origin.json").exists()
+    assert "skipped_active" in capsys.readouterr().out
+
+
+def test_set_schedule_reloads_installed_launch_agent(tmp_path, monkeypatch):
+    config = scan.default_scan_config()
+    plist = tmp_path / "session-scan.plist"
+    plist.write_text("installed", encoding="utf-8")
+    saved = {}
+    reloaded = []
+    monkeypatch.setattr(scan, "PLIST_PATH", plist)
+    monkeypatch.setattr(scan, "load_config", lambda: config)
+    monkeypatch.setattr(scan, "save_scan_config", lambda value: saved.update(value))
+    monkeypatch.setattr(scan, "command_install", lambda _args: reloaded.append(True))
+
+    scan.command_config(Namespace(config_command="set-schedule", times=["03:00", "13:00", "18:30"]))
+
+    assert saved["schedule_times"] == ["03:00", "13:00", "18:30"]
+    assert reloaded == [True]
 
 
 def test_discovery_deduplicates_active_and_archived_copy(tmp_path, monkeypatch):
