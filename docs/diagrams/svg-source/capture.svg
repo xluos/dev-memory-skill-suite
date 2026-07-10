@@ -1,96 +1,147 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
-  <defs>
-    <style>
-      .ui { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      .title { font-size: 30px; font-weight: 700; fill: #fff; }
-      .subtitle { font-size: 15px; fill: #cbd5e1; }
-      .section { font-size: 15px; font-weight: 700; fill: #334155; }
-      .box-title { font-size: 17px; font-weight: 700; fill: #0f172a; }
-      .box-copy { font-size: 13px; fill: #475569; }
-      .small { font-size: 12px; fill: #64748b; }
-    </style>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.10"/>
-    </filter>
-    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-      <path d="M0,0 L8,4 L0,8 Z" fill="#64748b"/>
-    </marker>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1080" width="1600" height="1080">
+  <rect x="0" y="0" width="1600" height="1080" fill="#F4F7FB"/>
+  <rect x="48" y="32" width="1504" height="112" rx="6" fill="#15233E"/>
+  <circle cx="96" cy="88" r="25" fill="#32B9C8"/>
+  <path d="M82 88 L108 88 M99 78 L109 88 L99 98" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="140" y="82" font-size="30" font-weight="700" fill="#FFFFFF" font-family="Arial, Noto Sans SC, sans-serif">Capture · 从会话到可维护记忆</text>
+  <text x="140" y="111" font-size="15" fill="#B7C5D9" font-family="Arial, Noto Sans SC, sans-serif">先理解语义与已有记忆，再决定新增、更新、纠错或跳过</text>
+  <rect x="1284" y="62" width="220" height="50" rx="25" fill="#243858" stroke="#476181"/>
+  <text x="1394" y="92" text-anchor="middle" font-size="13" font-weight="700" fill="#DCE8F5" font-family="Arial, Noto Sans SC, sans-serif">SEMANTIC · VALIDATED</text>
 
-  <rect width="1400" height="900" fill="#f8fafc"/>
-  <rect x="40" y="32" width="1320" height="100" rx="8" fill="#1e293b"/>
-  <text class="ui title" x="72" y="78">Capture 写入路由</text>
-  <text class="ui subtitle" x="72" y="108">显式语义优先 · 模糊内容保守兜底 · 纠错时改写原 entry</text>
-  <text class="mono subtitle" x="1328" y="84" text-anchor="end">dev-memory-cli capture</text>
+  <text x="68" y="190" font-size="13" font-weight="700" fill="#71839A" font-family="Arial, Noto Sans SC, sans-serif">01 输入方式</text>
+  <line x1="68" y1="202" x2="1532" y2="202" stroke="#D5DFEA"/>
+  <rect x="68" y="228" width="454" height="188" rx="6" fill="#EAF3FF" stroke="#72AEE8" stroke-width="2"/>
+  <circle cx="106" cy="267" r="20" fill="#337FC4"/>
+  <text x="106" y="272" text-anchor="middle" font-size="14" font-weight="700" fill="#FFFFFF" font-family="Arial, sans-serif">A</text>
+  <text x="140" y="263" font-size="18" font-weight="700" fill="#174D7A" font-family="Arial, Noto Sans SC, sans-serif">显式 kind</text>
+  <text x="140" y="287" font-size="13" fill="#5A7691" font-family="Arial, Noto Sans SC, sans-serif">调用方知道内容语义，直接声明目标类型</text>
+  <line x1="94" y1="310" x2="496" y2="310" stroke="#BBD7F2"/>
+  <rect x="94" y="330" width="110" height="30" rx="15" fill="#FFFFFF" stroke="#8DBCE9"/>
+  <rect x="216" y="330" width="82" height="30" rx="15" fill="#FFFFFF" stroke="#8DBCE9"/>
+  <rect x="310" y="330" width="94" height="30" rx="15" fill="#FFFFFF" stroke="#8DBCE9"/>
+  <rect x="416" y="330" width="80" height="30" rx="15" fill="#FFFFFF" stroke="#8DBCE9"/>
+  <text x="149" y="350" text-anchor="middle" font-size="11" fill="#3370A8" font-family="ui-monospace, monospace">decision</text>
+  <text x="257" y="350" text-anchor="middle" font-size="11" fill="#3370A8" font-family="ui-monospace, monospace">risk</text>
+  <text x="357" y="350" text-anchor="middle" font-size="11" fill="#3370A8" font-family="ui-monospace, monospace">glossary</text>
+  <text x="456" y="350" text-anchor="middle" font-size="11" fill="#3370A8" font-family="ui-monospace, monospace">filemap</text>
+  <text x="94" y="390" font-size="12" fill="#637D96" font-family="ui-monospace, monospace">capture record --kind &lt;kind&gt;</text>
 
-  <text class="ui section" x="56" y="176">输入</text>
-  <line x1="102" y1="171" x2="1344" y2="171" stroke="#cbd5e1" stroke-dasharray="4 5"/>
-  <g filter="url(#shadow)">
-    <rect x="80" y="202" width="350" height="104" rx="8" fill="#dbeafe" stroke="#2563eb"/>
-    <rect x="525" y="202" width="350" height="104" rx="8" fill="#dbeafe" stroke="#2563eb"/>
-    <rect x="970" y="202" width="350" height="104" rx="8" fill="#dbeafe" stroke="#2563eb"/>
-  </g>
-  <text class="ui box-title" x="104" y="238">显式 kind</text>
-  <text class="mono box-copy" x="104" y="267">record --kind decision ...</text>
-  <text class="ui small" x="104" y="290">最准确，直接选择目标文件与 section</text>
-  <text class="ui box-title" x="549" y="238">自动分类</text>
-  <text class="mono box-copy" x="549" y="267">record --auto --content ...</text>
-  <text class="ui small" x="549" y="290">decision / risk / glossary；否则 unsorted</text>
-  <text class="ui box-title" x="994" y="238">结构化批量输入</text>
-  <text class="mono box-copy" x="994" y="267">--summary-json / apply-summary-output</text>
-  <text class="ui small" x="994" y="290">一次会话可产生多项独立写入</text>
+  <rect x="548" y="228" width="454" height="188" rx="6" fill="#E8F8F4" stroke="#55BBA6" stroke-width="2"/>
+  <circle cx="586" cy="267" r="20" fill="#21A184"/>
+  <text x="586" y="272" text-anchor="middle" font-size="14" font-weight="700" fill="#FFFFFF" font-family="Arial, sans-serif">B</text>
+  <text x="620" y="263" font-size="18" font-weight="700" fill="#176B5C" font-family="Arial, Noto Sans SC, sans-serif">自动分类</text>
+  <text x="620" y="287" font-size="13" fill="#557F77" font-family="Arial, Noto Sans SC, sans-serif">根据文本信号判断稳定知识的语义归属</text>
+  <line x1="574" y1="310" x2="976" y2="310" stroke="#B3DDD4"/>
+  <rect x="574" y="330" width="118" height="30" rx="15" fill="#FFFFFF" stroke="#7AC8B8"/>
+  <rect x="704" y="330" width="92" height="30" rx="15" fill="#FFFFFF" stroke="#7AC8B8"/>
+  <rect x="808" y="330" width="104" height="30" rx="15" fill="#FFFFFF" stroke="#7AC8B8"/>
+  <rect x="924" y="330" width="52" height="30" rx="15" fill="#FFFFFF" stroke="#7AC8B8"/>
+  <text x="633" y="350" text-anchor="middle" font-size="11" fill="#247463" font-family="ui-monospace, monospace">decision</text>
+  <text x="750" y="350" text-anchor="middle" font-size="11" fill="#247463" font-family="ui-monospace, monospace">risk</text>
+  <text x="860" y="350" text-anchor="middle" font-size="11" fill="#247463" font-family="ui-monospace, monospace">glossary</text>
+  <text x="950" y="350" text-anchor="middle" font-size="11" fill="#247463" font-family="ui-monospace, monospace">?</text>
+  <text x="574" y="390" font-size="12" fill="#567E76" font-family="ui-monospace, monospace">--auto · 不确定时进入 unsorted</text>
 
-  <path d="M255 306 V350 H700" fill="none" stroke="#64748b" stroke-width="2"/>
-  <path d="M700 306 V350" fill="none" stroke="#64748b" stroke-width="2"/>
-  <path d="M1145 306 V350 H700" fill="none" stroke="#64748b" stroke-width="2"/>
-  <path d="M700 350 V382" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="1028" y="228" width="504" height="188" rx="6" fill="#F2ECFC" stroke="#9B72D8" stroke-width="2"/>
+  <circle cx="1066" cy="267" r="20" fill="#8455CF"/>
+  <text x="1066" y="272" text-anchor="middle" font-size="14" font-weight="700" fill="#FFFFFF" font-family="Arial, sans-serif">C</text>
+  <text x="1100" y="263" font-size="18" font-weight="700" fill="#5E369E" font-family="Arial, Noto Sans SC, sans-serif">会话总结</text>
+  <text x="1100" y="287" font-size="13" fill="#77658F" font-family="Arial, Noto Sans SC, sans-serif">全量语义消息 + 当前 branch / repo 记忆</text>
+  <line x1="1054" y1="310" x2="1506" y2="310" stroke="#D4C3ED"/>
+  <text x="1054" y="337" font-size="12" fill="#674A91" font-family="Arial, Noto Sans SC, sans-serif">长会话按序分块归并；模型只输出结构化操作建议</text>
+  <rect x="1054" y="354" width="212" height="32" rx="4" fill="#FFFFFF" stroke="#B69ADD"/>
+  <rect x="1278" y="354" width="228" height="32" rx="4" fill="#FFFFFF" stroke="#B69ADD"/>
+  <text x="1160" y="375" text-anchor="middle" font-size="11" fill="#694895" font-family="ui-monospace, monospace">--summary-json</text>
+  <text x="1392" y="375" text-anchor="middle" font-size="11" fill="#694895" font-family="ui-monospace, monospace">apply-summary-output</text>
 
-  <rect x="500" y="398" width="400" height="72" rx="8" fill="#ede9fe" stroke="#7c3aed" filter="url(#shadow)"/>
-  <text class="ui box-title" x="528" y="428">按 kind 路由</text>
-  <text class="ui box-copy" x="528" y="454">确定 scope、文件、section 与 append/upsert 模式</text>
+  <polyline points="295,416 295,449 800,449 800,474" fill="none" stroke="#337FC4" stroke-width="2"/>
+  <polyline points="775,416 775,474" fill="none" stroke="#21A184" stroke-width="2"/>
+  <polyline points="1280,416 1280,449 800,449" fill="none" stroke="#8455CF" stroke-width="2"/>
+  <path d="M793 464 L800 476 L807 464 Z" fill="#445A75"/>
 
-  <path d="M700 470 V510" fill="none" stroke="#64748b" stroke-width="2"/>
-  <path d="M225 510 H1175" fill="none" stroke="#64748b" stroke-width="2"/>
-  <path d="M225 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M540 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M860 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M1175 510 V538" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="68" y="470" font-size="13" font-weight="700" fill="#71839A" font-family="Arial, Noto Sans SC, sans-serif">02 语义路由与变更计划</text>
+  <rect x="68" y="490" width="1464" height="208" rx="6" fill="#17263F"/>
+  <circle cx="150" cy="560" r="27" fill="#337FC4"/>
+  <text x="150" y="566" text-anchor="middle" font-size="17" font-weight="700" fill="#FFFFFF" font-family="Arial, sans-serif">1</text>
+  <text x="190" y="548" font-size="15" font-weight="700" fill="#FFFFFF" font-family="Arial, Noto Sans SC, sans-serif">解析与标准化</text>
+  <text x="190" y="574" font-size="12" fill="#A8B9CE" font-family="Arial, Noto Sans SC, sans-serif">过滤流水账 · 保留 why / rule / caveat / source</text>
+  <line x1="390" y1="560" x2="438" y2="560" stroke="#7489A4" stroke-width="2"/>
+  <path d="M438 553 L450 560 L438 567 Z" fill="#7489A4"/>
+  <circle cx="494" cy="560" r="27" fill="#21A184"/>
+  <text x="494" y="566" text-anchor="middle" font-size="17" font-weight="700" fill="#FFFFFF" font-family="Arial, sans-serif">2</text>
+  <text x="534" y="548" font-size="15" font-weight="700" fill="#FFFFFF" font-family="Arial, Noto Sans SC, sans-serif">选择 scope 与 section</text>
+  <text x="534" y="574" font-size="12" fill="#A8B9CE" font-family="Arial, Noto Sans SC, sans-serif">branch 独有 / repo 共享 · 累积型 / 快照型</text>
+  <line x1="760" y1="560" x2="808" y2="560" stroke="#7489A4" stroke-width="2"/>
+  <path d="M808 553 L820 560 L808 567 Z" fill="#7489A4"/>
+  <circle cx="864" cy="560" r="27" fill="#8455CF"/>
+  <text x="864" y="566" text-anchor="middle" font-size="17" font-weight="700" fill="#FFFFFF" font-family="Arial, sans-serif">3</text>
+  <text x="904" y="548" font-size="15" font-weight="700" fill="#FFFFFF" font-family="Arial, Noto Sans SC, sans-serif">对照已有记忆</text>
+  <text x="904" y="574" font-size="12" fill="#A8B9CE" font-family="Arial, Noto Sans SC, sans-serif">相似 entry · 冲突结论 · 已失效内容 · 目标 ID</text>
+  <line x1="1128" y1="560" x2="1176" y2="560" stroke="#7489A4" stroke-width="2"/>
+  <path d="M1176 553 L1188 560 L1176 567 Z" fill="#7489A4"/>
+  <circle cx="1232" cy="560" r="27" fill="#E38D28"/>
+  <text x="1232" y="566" text-anchor="middle" font-size="17" font-weight="700" fill="#FFFFFF" font-family="Arial, sans-serif">4</text>
+  <text x="1272" y="548" font-size="15" font-weight="700" fill="#FFFFFF" font-family="Arial, Noto Sans SC, sans-serif">生成并校验操作</text>
+  <text x="1272" y="574" font-size="12" fill="#A8B9CE" font-family="Arial, Noto Sans SC, sans-serif">模型不直接改文件 · CLI 验证后应用</text>
+  <line x1="104" y1="622" x2="1496" y2="622" stroke="#32445F"/>
+  <rect x="128" y="641" width="180" height="34" rx="17" fill="#245B52"/>
+  <rect x="324" y="641" width="180" height="34" rx="17" fill="#28527A"/>
+  <rect x="520" y="641" width="180" height="34" rx="17" fill="#5A3D82"/>
+  <rect x="716" y="641" width="180" height="34" rx="17" fill="#7B4A52"/>
+  <rect x="912" y="641" width="180" height="34" rx="17" fill="#3E516B"/>
+  <rect x="1120" y="641" width="356" height="34" rx="17" fill="#253B58" stroke="#4A6687"/>
+  <text x="218" y="663" text-anchor="middle" font-size="12" font-weight="700" fill="#D9FFF8" font-family="ui-monospace, monospace">append · 新知识</text>
+  <text x="414" y="663" text-anchor="middle" font-size="12" font-weight="700" fill="#E2F2FF" font-family="ui-monospace, monospace">upsert · 快照</text>
+  <text x="610" y="663" text-anchor="middle" font-size="12" font-weight="700" fill="#F1E7FF" font-family="ui-monospace, monospace">rewrite · 纠错</text>
+  <text x="806" y="663" text-anchor="middle" font-size="12" font-weight="700" fill="#FFE7EA" font-family="ui-monospace, monospace">delete · 失效</text>
+  <text x="1002" y="663" text-anchor="middle" font-size="12" font-weight="700" fill="#E4EBF5" font-family="ui-monospace, monospace">skip · 无变化</text>
+  <text x="1298" y="663" text-anchor="middle" font-size="12" fill="#DCE8F6" font-family="Arial, Noto Sans SC, sans-serif">没有充分依据时保留现有条目</text>
 
-  <g filter="url(#shadow)">
-    <rect x="72" y="554" width="306" height="140" rx="8" fill="#ecfeff" stroke="#0891b2"/>
-    <rect x="387" y="554" width="306" height="140" rx="8" fill="#dcfce7" stroke="#16a34a"/>
-    <rect x="702" y="554" width="306" height="140" rx="8" fill="#fef3c7" stroke="#d97706"/>
-    <rect x="1017" y="554" width="311" height="140" rx="8" fill="#f3e8ff" stroke="#9333ea"/>
-  </g>
-  <text class="ui box-title" x="96" y="590">append 型知识</text>
-  <text class="mono box-copy" x="96" y="620">decision · risk · glossary · source</text>
-  <text class="mono box-copy" x="96" y="646">shared-decision/context/source</text>
-  <text class="ui small" x="96" y="674">写前相似度检查；命中时先 review</text>
-  <text class="ui box-title" x="411" y="590">upsert 型快照</text>
-  <text class="mono box-copy" x="411" y="620">overview · scope · constraint</text>
-  <text class="mono box-copy" x="411" y="646">filemap · shared-overview/constraint</text>
-  <text class="ui small" x="411" y="674">替换目标 section 的当前有效状态</text>
-  <text class="ui box-title" x="726" y="590">保守兜底</text>
-  <text class="mono box-copy" x="726" y="620">unsorted</text>
-  <text class="ui box-copy" x="726" y="646">无法明确分类时不猜测长期语义</text>
-  <text class="ui small" x="726" y="674">后续由 setup 统一分类</text>
-  <text class="ui box-title" x="1041" y="590">跨分支候选</text>
-  <text class="mono box-copy" x="1041" y="620">pending-promotion.md</text>
-  <text class="ui box-copy" x="1041" y="646">通用经验额外进入候选区</text>
-  <text class="ui small" x="1041" y="674">graduate 审核后才上提 repo 层</text>
+  <text x="68" y="742" font-size="13" font-weight="700" fill="#71839A" font-family="Arial, Noto Sans SC, sans-serif">03 记忆落点</text>
+  <line x1="68" y1="754" x2="1532" y2="754" stroke="#D5DFEA"/>
+  <rect x="68" y="778" width="936" height="218" rx="6" fill="#FFFFFF" stroke="#75B89B" stroke-width="2"/>
+  <rect x="68" y="778" width="10" height="218" rx="5" fill="#2D9E6B"/>
+  <text x="104" y="813" font-size="15" font-weight="700" fill="#226B4D" font-family="Arial, Noto Sans SC, sans-serif">BRANCH MEMORY · 当前分支工作语境</text>
+  <text x="104" y="838" font-size="12" fill="#6D7E8E" font-family="Arial, Noto Sans SC, sans-serif">分支独有的范围、决策、风险、术语和文件导航</text>
+  <rect x="104" y="862" width="198" height="54" rx="4" fill="#EDF8F2" stroke="#A7D4BF"/>
+  <rect x="316" y="862" width="198" height="54" rx="4" fill="#EDF8F2" stroke="#A7D4BF"/>
+  <rect x="528" y="862" width="198" height="54" rx="4" fill="#EDF8F2" stroke="#A7D4BF"/>
+  <rect x="740" y="862" width="228" height="54" rx="4" fill="#EDF8F2" stroke="#A7D4BF"/>
+  <text x="203" y="884" text-anchor="middle" font-size="12" font-weight="700" fill="#315F4B" font-family="ui-monospace, monospace">overview.md</text>
+  <text x="203" y="902" text-anchor="middle" font-size="10" fill="#6A887A" font-family="Arial, Noto Sans SC, sans-serif">overview / scope / constraint</text>
+  <text x="415" y="884" text-anchor="middle" font-size="12" font-weight="700" fill="#315F4B" font-family="ui-monospace, monospace">decisions.md</text>
+  <text x="415" y="902" text-anchor="middle" font-size="10" fill="#6A887A" font-family="Arial, Noto Sans SC, sans-serif">decision</text>
+  <text x="627" y="884" text-anchor="middle" font-size="12" font-weight="700" fill="#315F4B" font-family="ui-monospace, monospace">risks.md</text>
+  <text x="627" y="902" text-anchor="middle" font-size="10" fill="#6A887A" font-family="Arial, Noto Sans SC, sans-serif">risk</text>
+  <text x="854" y="884" text-anchor="middle" font-size="12" font-weight="700" fill="#315F4B" font-family="ui-monospace, monospace">glossary.md</text>
+  <text x="854" y="902" text-anchor="middle" font-size="10" fill="#6A887A" font-family="Arial, Noto Sans SC, sans-serif">glossary / source</text>
+  <rect x="104" y="930" width="280" height="42" rx="4" fill="#F5F8FB" stroke="#CBD7E2"/>
+  <rect x="398" y="930" width="280" height="42" rx="4" fill="#F5F8FB" stroke="#CBD7E2"/>
+  <rect x="692" y="930" width="276" height="42" rx="4" fill="#F5F8FB" stroke="#CBD7E2"/>
+  <text x="244" y="956" text-anchor="middle" font-size="11" fill="#566B80" font-family="ui-monospace, monospace">progress.md · filemap</text>
+  <text x="538" y="956" text-anchor="middle" font-size="11" fill="#566B80" font-family="ui-monospace, monospace">unsorted.md · fallback</text>
+  <text x="830" y="956" text-anchor="middle" font-size="11" fill="#566B80" font-family="ui-monospace, monospace">pending-promotion.md</text>
 
-  <text class="ui section" x="56" y="746">落盘与纠错</text>
-  <line x1="160" y1="741" x2="1344" y2="741" stroke="#cbd5e1" stroke-dasharray="4 5"/>
-  <path d="M225 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M540 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M855 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
-  <path d="M1172 694 V774" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="1030" y="778" width="502" height="218" rx="6" fill="#FFFFFF" stroke="#6BA7C8" stroke-width="2"/>
+  <rect x="1030" y="778" width="10" height="218" rx="5" fill="#287DAE"/>
+  <text x="1066" y="813" font-size="15" font-weight="700" fill="#245E82" font-family="Arial, Noto Sans SC, sans-serif">REPO MEMORY · 跨分支共享知识</text>
+  <text x="1066" y="838" font-size="12" fill="#6D7E8E" font-family="Arial, Noto Sans SC, sans-serif">只有所有分支都长期成立的内容才进入共享层</text>
+  <rect x="1066" y="862" width="210" height="68" rx="4" fill="#EDF6FB" stroke="#A8CCE0"/>
+  <rect x="1290" y="862" width="206" height="68" rx="4" fill="#EDF6FB" stroke="#A8CCE0"/>
+  <text x="1171" y="886" text-anchor="middle" font-size="12" font-weight="700" fill="#315D76" font-family="ui-monospace, monospace">overview.md</text>
+  <text x="1171" y="906" text-anchor="middle" font-size="10" fill="#668395" font-family="Arial, Noto Sans SC, sans-serif">shared overview / constraint</text>
+  <text x="1393" y="886" text-anchor="middle" font-size="12" font-weight="700" fill="#315D76" font-family="ui-monospace, monospace">decisions.md</text>
+  <text x="1393" y="906" text-anchor="middle" font-size="10" fill="#668395" font-family="Arial, Noto Sans SC, sans-serif">shared decision</text>
+  <rect x="1066" y="942" width="430" height="30" rx="4" fill="#F3F8FB" stroke="#BCD2DF"/>
+  <text x="1281" y="962" text-anchor="middle" font-size="11" fill="#526F80" font-family="ui-monospace, monospace">glossary.md · shared context / source</text>
 
-  <rect x="72" y="790" width="1256" height="72" rx="8" fill="#fff" stroke="#64748b" filter="url(#shadow)"/>
-  <text class="ui box-title" x="96" y="821">写入目标文件，更新 manifest 与 log</text>
-  <text class="ui box-copy" x="96" y="847">append 命中旧条目时：list/find → rewrite-entry / delete-entry / force / skip</text>
-  <line x1="890" y1="804" x2="890" y2="848" stroke="#cbd5e1"/>
-  <text class="ui box-title" x="918" y="821">不保存进度流水账</text>
-  <text class="ui box-copy" x="918" y="847">progress.md 只承载 Git 派生导航与 filemap</text>
+  <rect x="68" y="1018" width="1464" height="38" rx="6" fill="#E9EFF6" stroke="#CBD7E3"/>
+  <circle cx="96" cy="1037" r="9" fill="#2D9E6B"/>
+  <text x="115" y="1042" font-size="11" fill="#53677C" font-family="Arial, Noto Sans SC, sans-serif">累积型 section 默认最多 200 条</text>
+  <circle cx="424" cy="1037" r="9" fill="#287DAE"/>
+  <text x="443" y="1042" font-size="11" fill="#53677C" font-family="Arial, Noto Sans SC, sans-serif">repo 共享 section 最多 20 条</text>
+  <circle cx="751" cy="1037" r="9" fill="#8455CF"/>
+  <text x="770" y="1042" font-size="11" fill="#53677C" font-family="Arial, Noto Sans SC, sans-serif">存储 oldest first · 注入 newest first</text>
+  <circle cx="1122" cy="1037" r="9" fill="#E38D28"/>
+  <text x="1141" y="1042" font-size="11" fill="#53677C" font-family="Arial, Noto Sans SC, sans-serif">事件日志与 artifacts 不计入语义上限</text>
 </svg>
