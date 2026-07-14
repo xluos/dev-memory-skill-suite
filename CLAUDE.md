@@ -15,7 +15,7 @@ workflow 跑：
 
 1. `pytest -q` 测试套件
 2. 校验 tag 版本号 == `package.json` 版本号（不对就 fail-fast）
-3. `npm publish --provenance --access public`，OIDC trusted publisher 走签名 attestation，**不需要 NPM_TOKEN**
+3. npm 版本不存在时执行 `npm publish --provenance --access public`；已存在时跳过发布并继续创建 GitHub Release
 4. `softprops/action-gh-release` 自动建 GitHub Release，notes 由 GitHub 生成
 
 也支持 Actions tab 的 workflow_dispatch 用现有 tag 手动重跑（npm 同版本号会拒，所以幂等）。

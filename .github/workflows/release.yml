@@ -83,7 +83,20 @@ jobs:
       - name: Run package check
         run: npm run check
 
+      - name: Check whether npm version already exists
+        id: npm-version
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION="${{ steps.ver.outputs.version }}"
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "${NAME}@${VERSION} already exists; skip npm publish and continue to GitHub Release"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.npm-version.outputs.published != 'true'
         # Auth is OIDC via the package's Trusted Publisher entry (no
         # NODE_AUTH_TOKEN). `--provenance` is what triggers the OIDC
         # exchange with npm and emits the signed attestation.
