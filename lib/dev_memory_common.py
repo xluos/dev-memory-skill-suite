@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from collections import Counter
@@ -511,11 +512,29 @@ def asset_paths(repo_dir, branch_dir):
 
 def ensure_file(path, content):
     if not path.exists():
-        path.write_text(content, encoding="utf-8")
+        atomic_write_text(path, content)
+
+
+def atomic_write_text(path, content):
+    """Atomically replace a UTF-8 text file without exposing partial bytes."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = (path.stat().st_mode & 0o777) if path.exists() else 0o644
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def write_json(path, payload):
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def read_json(path):
@@ -1705,7 +1724,7 @@ def ensure_progress_auto_block(path):
     else:
         updated = content.rstrip() + auto_section
 
-    path.write_text(updated + ("" if updated.endswith("\n") else "\n"), encoding="utf-8")
+    atomic_write_text(path, updated + ("" if updated.endswith("\n") else "\n"))
     return path.read_text(encoding="utf-8")
 
 
@@ -1762,7 +1781,7 @@ def upsert_markdown_section(path, title, body):
             updated.append((existing_title, existing_body))
     if not replaced:
         updated.append((title, body))
-    path.write_text(join_sections(prefix, updated), encoding="utf-8")
+    atomic_write_text(path, join_sections(prefix, updated))
 
 
 def _section_is_placeholder_only(text):
@@ -1822,7 +1841,7 @@ def append_to_section(path, title, body, *, max_entries=None):
     if not matched:
         bounded, _pruned = limit_markdown_entries(body.strip(), max_entries=max_entries)
         updated.append((title, bounded))
-    path.write_text(join_sections(prefix, updated), encoding="utf-8")
+    atomic_write_text(path, join_sections(prefix, updated))
 
 
 def upsert_progress_section(path, title, body):
@@ -1849,7 +1868,7 @@ def upsert_progress_section(path, title, body):
     if not replaced:
         updated.append((title, body))
     rewritten = join_sections(prefix, updated).rstrip() + "\n\n" + marker + after
-    path.write_text(rewritten, encoding="utf-8")
+    atomic_write_text(path, rewritten)
 
 
 def sync_progress(paths, facts):
@@ -1864,7 +1883,7 @@ def sync_progress(paths, facts):
     )
     current = ensure_progress_auto_block(paths["progress"])
     updated = replace_auto_block(current, build_auto_block(facts))
-    paths["progress"].write_text(updated, encoding="utf-8")
+    atomic_write_text(paths["progress"], updated)
 
 
 # ---------------------------------------------------------------------------
@@ -1918,7 +1937,7 @@ def append_log_event(log_path, action, *, kind=None, summary=None, details=None)
         return
     if not log_path.exists():
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(template_log("unknown"), encoding="utf-8")
+        atomic_write_text(log_path, template_log("unknown"))
 
     header_parts = [f"## [{now_iso()}] {action}"]
     if kind:
@@ -1938,7 +1957,7 @@ def append_log_event(log_path, action, *, kind=None, summary=None, details=None)
     existing = log_path.read_text(encoding="utf-8")
     if not existing.endswith("\n"):
         existing += "\n"
-    log_path.write_text(existing + "\n" + block, encoding="utf-8")
+    atomic_write_text(log_path, existing + "\n" + block)
 
 
 # ---------------------------------------------------------------------------

@@ -118,6 +118,7 @@ def test_config_defaults_include_three_executors():
     assert config["schedule_times"] == ["03:00", "13:00"]
     assert config["skip_when_computer_active"] is True
     assert config["active_within_minutes"] == 10
+    assert config["invocation_timeout_seconds"] == 360
     assert scan.validate_config(config)["valid"] is True
 
 
@@ -200,3 +201,221 @@ def test_discovery_deduplicates_active_and_archived_copy(tmp_path, monkeypatch):
     assert len(sessions) == 1
     assert sessions[0]["path"] == str(archived)
     assert [item["text"] for item in sessions[0]["messages"]][-1] == "archived"
+
+
+def _candidate_session(tmp_path):
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text("abc", encoding="utf-8")
+    branch_dir = tmp_path / "memory" / "branches" / "main"
+    repo_dir = tmp_path / "memory"
+    branch_dir.mkdir(parents=True)
+    return {
+        "session_id": "session-1",
+        "path": str(transcript),
+        "size": 3,
+        "end_offset": 3,
+        "mtime": "2026-07-01T00:00:00Z",
+        "meta": {"cwd": str(tmp_path), "originator": "Codex Desktop"},
+        "messages": [{"role": "user", "text": "记住这个稳定决策", "start_offset": 0, "end_offset": 3}],
+        "session_usage": None,
+        "internal_marker": False,
+        "cursor_before": 0,
+        "new_bytes": 3,
+        "target": {
+            "repo_root": str(tmp_path),
+            "repo_key": "repo-key",
+            "repo_dir": str(repo_dir),
+            "branch": "main",
+            "branch_key": "main",
+            "branch_dir": str(branch_dir),
+            "storage_root": str(tmp_path / "storage"),
+        },
+        "status": "candidate",
+        "reason": None,
+    }
+
+
+def test_single_chunk_uses_one_final_invocation_and_rejects_empty_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "choose_executor", lambda _config: ("fake", {"model": None, "profile": None}))
+    calls = []
+
+    def fake_executor(_name, _preset, prompt, _cwd, _run_id, invocation, _max_attempts):
+        calls.append((prompt, invocation))
+        return {}, [{"invocation": invocation, "returncode": 0, "usage": {"total_tokens": 10}}]
+
+    monkeypatch.setattr(scan, "run_executor_with_retries", fake_executor)
+    monkeypatch.setattr(scan, "_apply_summary", lambda *_args: (_ for _ in ()).throw(AssertionError("must not apply")))
+
+    code = scan._execute_sessions(
+        scan.default_scan_config(),
+        Namespace(dry_run=False, json=False, scheduled=False),
+        [_candidate_session(tmp_path)],
+        "run-1",
+        0,
+    )
+
+    assert code == 1
+    assert len(calls) == 1
+    assert calls[0][1].endswith(":final")
+    assert "直接生成最终 summary-output" in calls[0][0]
+    run = json.loads((scan.SCAN_ROOT / "runs" / "run-1.json").read_text(encoding="utf-8"))
+    assert run["sessions"][0]["status"] == "failed"
+    assert "no memory mutations or skip_reason" in run["sessions"][0]["error"]
+    assert not (scan.SCAN_ROOT / "state" / "session-1.json").exists()
+
+
+def test_explicit_summary_skip_advances_cursor_without_apply(tmp_path, monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "choose_executor", lambda _config: ("fake", {"model": None, "profile": None}))
+    monkeypatch.setattr(
+        scan,
+        "run_executor_with_retries",
+        lambda *_args: (
+            {"skip_reason": "existing memory already covers this session"},
+            [{"returncode": 0, "usage": {"total_tokens": 10}}],
+        ),
+    )
+    monkeypatch.setattr(scan, "_apply_summary", lambda *_args: (_ for _ in ()).throw(AssertionError("must not apply")))
+
+    code = scan._execute_sessions(
+        scan.default_scan_config(),
+        Namespace(dry_run=False, json=False, scheduled=False),
+        [_candidate_session(tmp_path)],
+        "run-2",
+        0,
+    )
+
+    assert code == 0
+    run = json.loads((scan.SCAN_ROOT / "runs" / "run-2.json").read_text(encoding="utf-8"))
+    audit = run["sessions"][0]
+    assert audit["status"] == "skipped_summary"
+    assert audit["summary_output"]["skip_reason"] == "existing memory already covers this session"
+    assert run["summary_skipped_count"] == 1
+    state = json.loads((scan.SCAN_ROOT / "state" / "session-1.json").read_text(encoding="utf-8"))
+    assert state["processed_offset"] == 3
+
+
+def test_semantic_apply_is_done_and_advances_cursor(tmp_path, monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "choose_executor", lambda _config: ("fake", {"model": None, "profile": None}))
+    monkeypatch.setattr(
+        scan,
+        "run_executor_with_retries",
+        lambda *_args: (
+            {"decisions": [{"summary": "稳定决策"}]},
+            [{"returncode": 0, "usage": {"total_tokens": 10}}],
+        ),
+    )
+    monkeypatch.setattr(
+        scan,
+        "_apply_summary",
+        lambda *_args: {
+            "touched_targets": [{"file": "decisions.md"}],
+            "actions": [{"op": "append", "kind": "decision"}],
+            "skip_reason": None,
+        },
+    )
+
+    code = scan._execute_sessions(
+        scan.default_scan_config(),
+        Namespace(dry_run=False, json=False, scheduled=False),
+        [_candidate_session(tmp_path)],
+        "run-3",
+        0,
+    )
+
+    assert code == 0
+    run = json.loads((scan.SCAN_ROOT / "runs" / "run-3.json").read_text(encoding="utf-8"))
+    assert run["done_count"] == 1
+    assert run["sessions"][0]["semantic_action_count"] == 1
+    assert run["sessions"][0]["summary_output"]["field_counts"] == {"decisions": 1}
+
+
+def test_replay_reconstructs_historical_cursor_slice(tmp_path, monkeypatch):
+    transcript = tmp_path / "rollout.jsonl"
+    _codex_transcript(transcript, [("user", "第一段"), ("assistant", "第二段")])
+    end_offset = transcript.stat().st_size
+    target = {
+        "repo_root": str(tmp_path),
+        "repo_key": "repo-key",
+        "repo_dir": str(tmp_path / "memory"),
+        "branch": "main",
+        "branch_key": "main",
+        "branch_dir": str(tmp_path / "memory" / "branches" / "main"),
+        "storage_root": str(tmp_path / "storage"),
+    }
+    monkeypatch.setattr(scan, "resolve_target", lambda _cwd: (target, None))
+
+    replay = scan._replay_session("old-run", {
+        "session_id": "session-1",
+        "path": str(transcript),
+        "cwd": str(tmp_path),
+        "cursor_before": 0,
+        "cursor_after": end_offset,
+        "raw_size": end_offset,
+        "status": "done",
+        "apply_result": {"touched_targets": []},
+    })
+
+    assert replay["status"] == "candidate"
+    assert [item["text"] for item in replay["messages"]] == ["第一段", "第二段"]
+    assert replay["replay_source"]["previous_apply_empty"] is True
+    assert replay["end_offset"] == end_offset
+
+
+def test_covered_bytes_deduplicates_repeated_observations():
+    assert scan._covered_bytes([(0, 100), (0, 100), (100, 140), (120, 160)]) == 160
+
+
+def test_executor_timeout_is_a_single_failed_attempt(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        scan.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(scan.subprocess.TimeoutExpired("fake", 30)),
+    )
+
+    payload, records = scan.run_executor_with_retries(
+        "fake",
+        {"command": "fake", "_timeout_seconds": 30},
+        "prompt",
+        str(tmp_path),
+        "run-timeout",
+        "session-1:final",
+        2,
+    )
+
+    assert payload is None
+    assert len(records) == 1
+    assert records[0]["timed_out"] is True
+    assert records[0]["timeout_seconds"] == 30
+
+
+def test_replay_parser_accepts_one_shot_executor_override():
+    args = scan.build_parser().parse_args([
+        "replay",
+        "--run-id",
+        "run-1",
+        "--session-id",
+        "session-1",
+        "--executor",
+        "codex",
+    ])
+
+    assert args.executor == "codex"
+
+
+def test_summary_payload_validation_rejects_schema_placeholders():
+    errors = scan._summary_payload_validation_errors({
+        "decisions": [{"summary": "", "reason": "真实原因"}],
+        "risks": ["risk\nmitigation"],
+        "glossary": ["term\ndefinition"],
+        "shared_sources": ["name\nurl\nnote"],
+    })
+
+    assert errors == [
+        "decisions[0] requires a non-empty summary",
+        "risks[0] contains schema placeholder text",
+        "glossary[0] contains schema placeholder text",
+        "shared_sources[0] contains schema placeholder text",
+    ]

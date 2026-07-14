@@ -111,6 +111,44 @@ def test_apply_summary_output_noop_does_not_update_capture_manifest(branch_dir):
     assert after == before
 
 
+def test_apply_summary_output_ignores_decision_without_summary(branch_dir):
+    before = branch_dir["paths"]["decisions"].read_text(encoding="utf-8")
+
+    code, out = _run_apply(branch_dir, {
+        "decisions": [{"summary": "", "reason": "不能单独写入的原因"}],
+    })
+
+    assert code == 0
+    assert out["touched_targets"] == []
+    assert branch_dir["paths"]["decisions"].read_text(encoding="utf-8") == before
+
+
+def test_apply_summary_output_removes_unbulleted_schema_placeholder_orphans(seed_branch_files):
+    branch = seed_branch_files({
+        "risks": (
+            "# 风险\n\n"
+            "## 阻塞与注意点\n\n"
+            "- 保留的风险\n\n"
+            "mitigation\n\n"
+            "- 另一条风险\n"
+        ),
+        "glossary": (
+            "# 术语\n\n"
+            "## 当前有效上下文\n\n"
+            "- 保留的术语\n\n"
+            "definition\n"
+        ),
+    })
+
+    code, out = _run_apply(branch, {"skip_reason": "repair historical placeholders"})
+
+    assert code == 0
+    assert sum(action.get("removed", 0) for action in out["actions"]) == 2
+    assert "mitigation" not in branch["paths"]["risks"].read_text(encoding="utf-8")
+    assert "definition" not in branch["paths"]["glossary"].read_text(encoding="utf-8")
+    assert "保留的风险" in branch["paths"]["risks"].read_text(encoding="utf-8")
+
+
 def test_apply_summary_output_preflights_targeted_edits(seed_branch_files):
     branch = seed_branch_files({
         "decisions": (

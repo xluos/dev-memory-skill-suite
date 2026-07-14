@@ -16,9 +16,11 @@ Subcommands:
 
 import argparse
 import difflib
+import fcntl
 import json
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +29,7 @@ from dev_memory_common import (
     AUTO_END,
     AUTO_START,
     PLACEHOLDER_MARKERS,
+    atomic_write_text,
     append_log_event,
     append_to_section,
     asset_paths,
@@ -34,6 +37,7 @@ from dev_memory_common import (
     collect_git_facts,
     ensure_branch_paths_exist,
     get_head_commit,
+    get_branch_paths,
     get_setup_completed,
     is_cross_branch_candidate,
     join_sections,
@@ -140,7 +144,7 @@ def _append_with_separator(path, title, body, *, enforce_limit=True, max_entries
             else (body_stripped, 0)
         )
         updated.append((title, bounded))
-    path.write_text(join_sections(prefix, updated), encoding="utf-8")
+    atomic_write_text(path, join_sections(prefix, updated))
     return pruned
 
 
@@ -770,7 +774,7 @@ def _entry_mutation(paths, eid, *, new_text=None, delete=False):
 
     new_sections = list(sections)
     new_sections[section_idx] = (section_title, new_body)
-    target_path.write_text(join_sections(prefix, new_sections), encoding="utf-8")
+    atomic_write_text(target_path, join_sections(prefix, new_sections))
     return {
         "id": eid,
         "file_key": file_key,
@@ -1100,7 +1104,7 @@ def _prune_repo_shared_section(path, section_title, *, max_entries, max_entry_ch
         updated.append((existing_title, new_body))
     if not changed:
         return None
-    path.write_text(join_sections(prefix, updated), encoding="utf-8")
+    atomic_write_text(path, join_sections(prefix, updated))
     return result
 
 
@@ -1168,7 +1172,7 @@ def prune_bounded_memory(paths, *, max_entries=None):
                     "max_entries": max_entries,
                 })
         if changed:
-            path.write_text(join_sections(prefix, updated), encoding="utf-8")
+            atomic_write_text(path, join_sections(prefix, updated))
     return touched
 
 
@@ -1278,6 +1282,8 @@ def _decision_content(item):
     if isinstance(item, str):
         return item.strip()
     if isinstance(item, dict):
+        if not _decision_summary(item):
+            return ""
         return decision_body(item)
     return ""
 
@@ -1962,6 +1968,45 @@ def command_apply_summary_output(args):
             "reason": item.get("reason"),
         })
 
+    # Repair schema placeholder prose left by malformed historical summary
+    # output. Valid entries are top-level bullets; these exact unbulleted
+    # words are generator scaffolding and should never survive in memory.
+    placeholder_words = {
+        "decision", "summary", "reason", "impact", "risk", "mitigation",
+        "term", "definition", "name", "url", "note", "label", "path", "content",
+    }
+    for file_key in ("decisions", "risks", "glossary", "repo_glossary"):
+        path = paths[file_key]
+        if not path.exists():
+            continue
+        content = path.read_text(encoding="utf-8")
+        prefix, sections = split_sections(content)
+        updated = []
+        removed = 0
+        for section_title, section_body in sections:
+            kept_lines = []
+            section_removed = 0
+            for line in section_body.splitlines():
+                stripped = line.strip().strip(":：").lower()
+                is_bullet = line.lstrip().startswith(("- ", "* ", "+ "))
+                if stripped in placeholder_words and not is_bullet:
+                    section_removed += 1
+                    continue
+                kept_lines.append(line)
+            if section_removed:
+                rec = {
+                    "file": _label(file_key),
+                    "section": section_title,
+                    "mode": "remove-placeholder-orphans",
+                    "removed": section_removed,
+                }
+                touched.append(rec)
+                actions.append({"op": "remove-placeholder-orphans", **rec})
+                removed += section_removed
+            updated.append((section_title, "\n".join(kept_lines).strip()))
+        if removed:
+            atomic_write_text(path, join_sections(prefix, updated))
+
     bounded = prune_bounded_memory(paths)
     if bounded:
         touched.extend(bounded)
@@ -2177,6 +2222,20 @@ def _add_common_args(parser):
     parser.add_argument("--branch", help="Branch name. Defaults to the current checked-out branch")
 
 
+@contextmanager
+def _repo_command_lock(args):
+    """Serialize capture commands per repo so read-modify-write stays coherent."""
+    _, _, _, _, _, repo_dir, _ = get_branch_paths(args.repo, args.context_dir, args.branch)
+    lock_path = repo_dir / "jobs" / "capture.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Unified write entrypoint for dev-memory repo+branch memory (merges old sync + update).",
@@ -2297,7 +2356,11 @@ def main():
             "sync-working-tree": command_sync_working_tree,
             "record-head": command_record_head,
         }
-        return handlers[args.command](args)
+        handler = handlers[args.command]
+        if args.command == "suggest-kind":
+            return handler(args)
+        with _repo_command_lock(args):
+            return handler(args)
     except Exception as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1

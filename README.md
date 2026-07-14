@@ -223,14 +223,18 @@ dev-memory-cli session-scan run --dry-run --json
 dev-memory-cli session-scan run
 dev-memory-cli session-scan stats --json
 dev-memory-cli session-scan history --limit 20
+dev-memory-cli session-scan replay --run-id <run-id> --session-id <session-id> [--session-id <session-id> ...] [--executor codex]
 dev-memory-cli session-scan config show
 dev-memory-cli session-scan config set-executor codex
 dev-memory-cli session-scan config set-model codex <model>
 dev-memory-cli session-scan config set-schedule 03:00 13:00
 dev-memory-cli session-scan config set-active-minutes 10
+dev-memory-cli session-scan config set-timeout 360
 ```
 
 已安装定时任务时，`set-schedule` 会自动重载 LaunchAgent，使新的时间列表立即生效。
+
+`replay` 会按历史 run 记录的 `cursor_before` / `cursor_after` 精确重放指定会话，不回退当前会话游标；`--executor` 只覆盖本次运行，不修改持久配置。单分块会话只调用一次模型；最终结果必须包含至少一个记忆变更，或提供非空 `skip_reason`。空对象、只有 `title`、以及没有产生语义 action 且未说明原因的结果都会标记失败并保留重试空间。单次模型调用默认 360 秒超时，超时不会立即重试。run 账本会记录输出字段计数、`skip_reason`、payload 哈希、有效/观测字节数和语义 action 数，不保存原始总结正文。
 
 ## 运行模式
 
@@ -331,7 +335,7 @@ dev-memory-cli branch [list|inspect|rename|fork|delete|init|inherit-worktree-bas
 dev-memory-cli context <show|sync|injection-preview>
 dev-memory-cli workspace <show|primary>
 dev-memory-cli summary <extract-core>
-dev-memory-cli session-scan <run|install|status|stats|history|show|uninstall|config>
+dev-memory-cli session-scan <run|replay|install|status|stats|history|show|uninstall|config>
 dev-memory-cli hook <session-start|pre-compact|stop|session-end>
 dev-memory-cli ui
 dev-memory-cli install-hooks <codex|claude|--all>

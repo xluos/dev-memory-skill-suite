@@ -29,6 +29,35 @@ PLIST_PATH = Path(os.environ.get(
     "~/Library/LaunchAgents/com.dev-memory.session-scan.plist",
 )).expanduser()
 INTERNAL_MARKER = "DEV_MEMORY_INTERNAL_SESSION_SUMMARY_V1"
+SUMMARY_MUTATION_FIELDS = (
+    "file_map",
+    "decisions",
+    "risks",
+    "glossary",
+    "shared_decisions",
+    "shared_context",
+    "shared_sources",
+    "upserts",
+    "appends",
+    "rewrites",
+    "deletes",
+)
+SUMMARY_PLACEHOLDER_WORDS = {
+    "decision",
+    "summary",
+    "reason",
+    "impact",
+    "risk",
+    "mitigation",
+    "term",
+    "definition",
+    "name",
+    "url",
+    "note",
+    "label",
+    "path",
+    "content",
+}
 
 
 DEFAULT_EXECUTORS = {
@@ -105,6 +134,7 @@ def default_scan_config():
         "idle_minutes": 60,
         "first_lookback_days": 3,
         "max_attempts": 2,
+        "invocation_timeout_seconds": 360,
     }
 
 
@@ -163,6 +193,11 @@ def validate_config(config):
             errors.append("active_within_minutes must be at least 1")
     except (TypeError, ValueError):
         errors.append("active_within_minutes must be an integer")
+    try:
+        if int(config.get("invocation_timeout_seconds", 0)) < 30:
+            errors.append("invocation_timeout_seconds must be at least 30")
+    except (TypeError, ValueError):
+        errors.append("invocation_timeout_seconds must be an integer")
     return {"valid": not errors, "errors": errors, "warnings": warnings}
 
 
@@ -486,15 +521,105 @@ MESSAGES_JSON:
 """
 
 
+def _single_prompt(target, chunk):
+    payload = {
+        "existing_memory": _existing_memory(target),
+        "messages": [{"role": item["role"], "text": item["text"]} for item in chunk],
+    }
+    return f"""{INTERNAL_MARKER}
+你是 dev-memory 的后台会话总结器。阅读完整会话与 existing_memory，直接生成最终 summary-output，不要先输出中间摘要。
+只保留未来开发会话中仍有价值、且 existing_memory 尚未覆盖的决策、约束、风险、术语、命令、外部入口和功能文件定位；不要记录聊天流水账、普通进展或可从 Git 直接恢复的历史。
+旧结论失效时使用 rewrites/deletes，不要追加矛盾条目。如果没有任何需要写入、改写或删除的内容，必须返回非空 skip_reason；禁止只返回 title 或空对象。
+字段 schema：decisions/shared_decisions 是对象数组，每项使用 summary（完整结论）、可选 reason、可选 impact；risks/glossary/shared_context/shared_sources 是完整自然语言字符串数组；file_map 每项为 {{"label":"功能说明","paths":["真实相对路径"]}}；upserts/appends 每项必须有 kind 和 content；rewrites 每项必须有 id/content/reason；deletes 每项必须有 id/reason。
+所有值必须来自会话事实并可独立理解。禁止输出 decision/summary/reason/impact/risk/mitigation/term/definition/name/url/note/path/content 等 schema 占位词，禁止留空 summary。
+只输出一个 JSON 对象，不要 markdown fence。允许字段：title、file_map、decisions、risks、glossary、shared_decisions、shared_context、shared_sources、upserts、appends、rewrites、deletes、skip_reason。
+INPUT_JSON:
+{json.dumps(payload, ensure_ascii=False)}
+"""
+
+
 def _final_prompt(target, partials):
     payload = {"existing_memory": _existing_memory(target), "partial_summaries": partials}
     return f"""{INTERNAL_MARKER}
 你是 dev-memory 的后台会话总结器。把所有 partial_summaries 与 existing_memory 合并为一个最终 summary-output。
 旧结论失效时使用 rewrites/deletes，不要追加矛盾条目；重复内容跳过。不要写当前进展、下一步或提交历史。
+如果没有任何需要写入、改写或删除的内容，必须返回非空 skip_reason；禁止只返回 title 或空对象。
+decisions/shared_decisions 每项必须有非空 summary；risks/glossary/shared_context/shared_sources 必须是完整自然语言字符串；file_map 每项必须有 label 和真实 paths。禁止输出 schema 占位词或空 summary。
 只输出一个 JSON 对象，不要 markdown fence。允许字段：title、file_map、decisions、risks、glossary、shared_decisions、shared_context、shared_sources、upserts、appends、rewrites、deletes、skip_reason。
 INPUT_JSON:
 {json.dumps(payload, ensure_ascii=False)}
 """
+
+
+def _summary_payload_meta(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    field_counts = {}
+    for key in SUMMARY_MUTATION_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            field_counts[key] = len(value)
+        elif value:
+            field_counts[key] = 1
+    skip_reason = payload.get("skip_reason")
+    skip_reason = skip_reason.strip() if isinstance(skip_reason, str) else None
+    return {
+        "keys": sorted(payload),
+        "field_counts": field_counts,
+        "mutation_count": sum(field_counts.values()),
+        "skip_reason": skip_reason or None,
+        "chars": len(serialized),
+        "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+    }
+
+
+def _looks_like_placeholder_text(value):
+    if not isinstance(value, str):
+        return False
+    words = []
+    for line in value.splitlines():
+        normalized = re.sub(r"^[\s>*+-]+", "", line).strip().strip(":：").lower()
+        if normalized:
+            words.append(normalized)
+    return bool(words) and all(word in SUMMARY_PLACEHOLDER_WORDS for word in words)
+
+
+def _summary_payload_validation_errors(payload):
+    errors = []
+    if not isinstance(payload, dict):
+        return ["summary output must be an object"]
+    for field in ("decisions", "shared_decisions"):
+        for index, item in enumerate(payload.get(field) or []):
+            if isinstance(item, str):
+                summary = item.strip()
+            elif isinstance(item, dict):
+                summary = str(item.get("summary") or item.get("decision") or "").strip()
+            else:
+                summary = ""
+            if not summary:
+                errors.append(f"{field}[{index}] requires a non-empty summary")
+            elif _looks_like_placeholder_text(summary):
+                errors.append(f"{field}[{index}] contains schema placeholder text")
+    for field in ("risks", "glossary", "shared_context", "shared_sources"):
+        for index, item in enumerate(payload.get(field) or []):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"{field}[{index}] must be a non-empty string")
+            elif _looks_like_placeholder_text(item):
+                errors.append(f"{field}[{index}] contains schema placeholder text")
+    for index, item in enumerate(payload.get("file_map") or []):
+        paths = item.get("paths") if isinstance(item, dict) else None
+        if not isinstance(item, dict) or not str(item.get("label") or "").strip() or not paths:
+            errors.append(f"file_map[{index}] requires label and paths")
+    return errors
+
+
+def _semantic_action_count(apply_result):
+    actions = apply_result.get("actions") if isinstance(apply_result, dict) else []
+    return sum(
+        1
+        for action in (actions or [])
+        if isinstance(action, dict) and not str(action.get("op") or "").startswith("prune-")
+    )
 
 
 def _executor_args(name, preset, prompt):
@@ -615,22 +740,46 @@ def run_executor(name, preset, prompt, cwd, run_id, invocation):
     env = dict(os.environ)
     env.update({str(k): str(v) for k, v in (preset.get("env") or {}).items()})
     started = time.time()
-    result = subprocess.run(args, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+    timeout_seconds = int(preset.get("_timeout_seconds", 360))
     record = {
         "invocation": invocation,
+        "stage": "final" if ":final" in invocation else "partial",
         "executor": name,
         "model": preset.get("model"),
         "profile": preset.get("profile"),
+        "prompt_chars": len(prompt),
         "started_at": dt.datetime.fromtimestamp(started, dt.timezone.utc).isoformat(),
-        "duration_ms": int((time.time() - started) * 1000),
-        "returncode": result.returncode,
+        "duration_ms": 0,
+        "returncode": None,
         "usage_status": "unavailable",
     }
+    try:
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        record.update({
+            "duration_ms": int((time.time() - started) * 1000),
+            "returncode": None,
+            "timed_out": True,
+            "timeout_seconds": timeout_seconds,
+            "error": f"executor timed out after {timeout_seconds} seconds",
+        })
+        return None, record
+    record["duration_ms"] = int((time.time() - started) * 1000)
+    record["returncode"] = result.returncode
     if result.returncode != 0:
         record["error"] = (result.stderr or result.stdout or "executor failed")[-4000:]
         return None, record
     try:
         payload, usage, session_id = _parse_executor_output(name, result.stdout, result.stderr)
+        record["output"] = _summary_payload_meta(payload)
         record["usage"] = usage
         record["usage_status"] = "reported" if usage else "unavailable"
         record["internal_session_id"] = session_id
@@ -657,6 +806,8 @@ def run_executor_with_retries(name, preset, prompt, cwd, run_id, invocation, max
         record["attempt"] = attempt
         records.append(record)
         if payload is not None:
+            break
+        if record.get("timed_out"):
             break
     return payload, records
 
@@ -791,10 +942,15 @@ def _skipped_activity_run(run_id, started, activity, *, dry_run=False):
         "session_count": 0,
         "candidate_count": 0,
         "done_count": 0,
+        "summary_skipped_count": 0,
         "failed_count": 0,
         "skipped_count": 0,
+        "discovery_skipped_count": 0,
         "raw_bytes": 0,
         "new_bytes": 0,
+        "observed_new_bytes": 0,
+        "eligible_new_bytes": 0,
+        "skipped_new_bytes": 0,
         "semantic_messages": 0,
         "semantic_chars": 0,
         "summary_usage": None,
@@ -802,6 +958,205 @@ def _skipped_activity_run(run_id, started, activity, *, dry_run=False):
         "invocations": [],
         "sessions": [],
     }
+
+
+def _advance_session_state(session):
+    state_path = _state_path(session["session_id"])
+    existing = _read_json(state_path, {}) or {}
+    existing_offset = int(existing.get("processed_offset", 0))
+    if existing_offset >= session["end_offset"]:
+        return existing_offset
+    _atomic_json(state_path, {
+        "schema_version": SCHEMA_VERSION,
+        "session_id": session["session_id"],
+        "path": session["path"],
+        "processed_offset": session["end_offset"],
+        "raw_size": session["size"],
+        "sha256": hashlib.sha256(Path(session["path"]).read_bytes()).hexdigest(),
+        "session_usage": session["session_usage"],
+        "internal_marker": session["internal_marker"],
+        "repo_key": session["target"]["repo_key"],
+        "branch": session["target"]["branch"],
+        "updated_at": now_iso(),
+    })
+    return session["end_offset"]
+
+
+def _execute_sessions(config, args, sessions, run_id, started, *, activity=None, run_kind="scan", replay_source=None):
+    candidates = [item for item in sessions if item["status"] == "candidate" and item["messages"]]
+    executor_name = None
+    preset = None
+    if candidates and not args.dry_run:
+        executor_override = getattr(args, "executor", None)
+        executor_config = {**config, "executor": executor_override} if executor_override else config
+        executor_name, preset = choose_executor(executor_config)
+        preset = dict(preset)
+        preset["_timeout_seconds"] = int(config.get("invocation_timeout_seconds", 360))
+    invocations = []
+    results = []
+    for session in sessions:
+        audit = {
+            "schema_version": SCHEMA_VERSION,
+            "session_id": session["session_id"],
+            "path": session["path"],
+            "originator": session["meta"].get("originator"),
+            "source": session["meta"].get("source"),
+            "thread_source": session["meta"].get("thread_source"),
+            "cwd": session["meta"].get("cwd"),
+            "raw_size": session["size"],
+            "cursor_before": session["cursor_before"],
+            "new_bytes": session["new_bytes"],
+            "semantic_messages": len(session["messages"]),
+            "semantic_chars": sum(len(item["text"]) for item in session["messages"]),
+            "session_usage": session["session_usage"],
+            "repo_key": (session["target"] or {}).get("repo_key"),
+            "branch": (session["target"] or {}).get("branch"),
+            "status": session["status"],
+            "reason": session["reason"],
+            "last_scanned_at": now_iso(),
+        }
+        if session.get("replay_source"):
+            audit["replay_source"] = session["replay_source"]
+        if session not in candidates:
+            if audit["status"] == "candidate":
+                audit["status"] = "skipped"
+                audit["reason"] = "no_semantic_messages"
+            results.append(audit)
+            _atomic_json(_session_audit_path(session["session_id"]), audit)
+            continue
+        chunks = _chunk_messages(session["messages"], int(config.get("chunk_chars", 60000)))
+        audit["chunk_count"] = len(chunks)
+        audit["chunks"] = [
+            {
+                "index": index,
+                "start_offset": chunk[0]["start_offset"],
+                "end_offset": chunk[-1]["end_offset"],
+                "messages": len(chunk),
+                "chars": sum(len(item["text"]) for item in chunk),
+                "sha256": hashlib.sha256("\n".join(item["text"] for item in chunk).encode()).hexdigest(),
+            }
+            for index, chunk in enumerate(chunks, 1)
+        ]
+        if args.dry_run:
+            audit["status"] = "dry_run"
+            results.append(audit)
+            _atomic_json(_session_audit_path(session["session_id"]), audit)
+            continue
+        failed = None
+        invocation_start = len(invocations)
+        final_payload = None
+        if len(chunks) == 1:
+            final_payload, attempt_records = run_executor_with_retries(
+                executor_name, preset, _single_prompt(session["target"], chunks[0]),
+                session["target"]["repo_root"], run_id, f"{session['session_id']}:final",
+                int(config.get("max_attempts", 2)),
+            )
+            invocations.extend(attempt_records)
+            if final_payload is None:
+                failed = attempt_records[-1].get("error", "final summary failed")
+        else:
+            partials = []
+            for index, chunk in enumerate(chunks, 1):
+                payload, attempt_records = run_executor_with_retries(
+                    executor_name, preset, _partial_prompt(session["target"], chunk, index, len(chunks)),
+                    session["target"]["repo_root"], run_id, f"{session['session_id']}:chunk:{index}",
+                    int(config.get("max_attempts", 2)),
+                )
+                invocations.extend(attempt_records)
+                if payload is None:
+                    failed = attempt_records[-1].get("error", "chunk summary failed")
+                    break
+                partials.append(payload)
+            if not failed:
+                final_payload, attempt_records = run_executor_with_retries(
+                    executor_name, preset, _final_prompt(session["target"], partials),
+                    session["target"]["repo_root"], run_id, f"{session['session_id']}:final",
+                    int(config.get("max_attempts", 2)),
+                )
+                invocations.extend(attempt_records)
+                if final_payload is None:
+                    failed = attempt_records[-1].get("error", "final summary failed")
+        if not failed:
+            summary_output = _summary_payload_meta(final_payload)
+            validation_errors = _summary_payload_validation_errors(final_payload)
+            if validation_errors:
+                summary_output["validation_errors"] = validation_errors
+            audit["summary_output"] = summary_output
+            if validation_errors:
+                failed = "invalid final summary output: " + "; ".join(validation_errors)
+            elif not summary_output["mutation_count"] and not summary_output["skip_reason"]:
+                failed = "final summary output has no memory mutations or skip_reason"
+        if not failed and audit["summary_output"]["mutation_count"]:
+            try:
+                audit["apply_result"] = _apply_summary(session["target"], final_payload)
+                audit["semantic_action_count"] = _semantic_action_count(audit["apply_result"])
+                if not audit["semantic_action_count"]:
+                    if audit["summary_output"]["skip_reason"]:
+                        audit["status"] = "skipped_summary"
+                    else:
+                        failed = "summary output produced no semantic memory actions or skip_reason"
+                else:
+                    audit["status"] = "done"
+            except Exception as exc:
+                failed = str(exc)
+        elif not failed:
+            audit["status"] = "skipped_summary"
+            audit["semantic_action_count"] = 0
+            audit["apply_result"] = {
+                "mode": "not-applied",
+                "touched_targets": [],
+                "actions": [],
+                "skip_reason": audit["summary_output"]["skip_reason"],
+            }
+        if not failed and audit["status"] in {"done", "skipped_summary"}:
+            audit["cursor_after"] = session["end_offset"]
+            audit["state_offset_after"] = _advance_session_state(session)
+        if failed:
+            audit["status"] = "failed"
+            audit["error"] = failed
+        audit["summary_usage"], audit["usage_unavailable_invocations"] = _sum_usage(invocations[invocation_start:])
+        audit["executor"] = executor_name
+        audit["model"] = preset.get("model")
+        results.append(audit)
+        _atomic_json(_session_audit_path(session["session_id"]), audit)
+    usage, unavailable = _sum_usage(invocations)
+    run = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "run_kind": run_kind,
+        "started_at": dt.datetime.fromtimestamp(started, dt.timezone.utc).isoformat(),
+        "finished_at": now_iso(),
+        "duration_ms": int((time.time() - started) * 1000),
+        "dry_run": bool(args.dry_run),
+        "scheduled": bool(getattr(args, "scheduled", False)),
+        "activity": activity,
+        "executor": executor_name,
+        "model": preset.get("model") if preset else None,
+        "profile": preset.get("profile") if preset else None,
+        "session_count": len(results),
+        "candidate_count": len(candidates),
+        "done_count": sum(item["status"] == "done" for item in results),
+        "summary_skipped_count": sum(item["status"] == "skipped_summary" for item in results),
+        "failed_count": sum(item["status"] == "failed" for item in results),
+        "skipped_count": sum(item["status"] in {"skipped", "skipped_summary"} for item in results),
+        "discovery_skipped_count": sum(item["status"] == "skipped" for item in results),
+        "raw_bytes": sum(item["raw_size"] for item in results),
+        "new_bytes": sum(item["new_bytes"] for item in results),
+        "observed_new_bytes": sum(item["new_bytes"] for item in results),
+        "eligible_new_bytes": sum(item["new_bytes"] for item in results if item["status"] != "skipped"),
+        "skipped_new_bytes": sum(item["new_bytes"] for item in results if item["status"] == "skipped"),
+        "semantic_messages": sum(item["semantic_messages"] for item in results),
+        "semantic_chars": sum(item["semantic_chars"] for item in results),
+        "summary_usage": usage,
+        "usage_unavailable_invocations": unavailable,
+        "invocations": invocations,
+        "sessions": results,
+    }
+    if replay_source:
+        run["replay_source"] = replay_source
+    _persist_scan_run(run, "scan_completed")
+    print(json.dumps(run, ensure_ascii=False, indent=2) if args.json else _format_run(run))
+    return 1 if run["failed_count"] else 0
 
 
 def run_scan(args):
@@ -828,140 +1183,7 @@ def run_scan(args):
             "first_lookback_days": lookback_days,
         })
     sessions = discover(config, args.since)
-    candidates = [item for item in sessions if item["status"] == "candidate" and item["messages"]]
-    executor_name = None
-    preset = None
-    if candidates and not args.dry_run:
-        executor_name, preset = choose_executor(config)
-    invocations = []
-    results = []
-    for session in sessions:
-        audit = {
-            "schema_version": SCHEMA_VERSION,
-            "session_id": session["session_id"],
-            "path": session["path"],
-            "originator": session["meta"].get("originator"),
-            "source": session["meta"].get("source"),
-            "thread_source": session["meta"].get("thread_source"),
-            "cwd": session["meta"].get("cwd"),
-            "raw_size": session["size"],
-            "cursor_before": session["cursor_before"],
-            "new_bytes": session["new_bytes"],
-            "semantic_messages": len(session["messages"]),
-            "semantic_chars": sum(len(item["text"]) for item in session["messages"]),
-            "session_usage": session["session_usage"],
-            "repo_key": (session["target"] or {}).get("repo_key"),
-            "branch": (session["target"] or {}).get("branch"),
-            "status": session["status"],
-            "reason": session["reason"],
-            "last_scanned_at": now_iso(),
-        }
-        if session not in candidates:
-            if audit["status"] == "candidate":
-                audit["status"] = "skipped"
-                audit["reason"] = "no_semantic_messages"
-            results.append(audit)
-            _atomic_json(_session_audit_path(session["session_id"]), audit)
-            continue
-        chunks = _chunk_messages(session["messages"], int(config.get("chunk_chars", 60000)))
-        audit["chunk_count"] = len(chunks)
-        audit["chunks"] = [
-            {
-                "index": index,
-                "start_offset": chunk[0]["start_offset"],
-                "end_offset": chunk[-1]["end_offset"],
-                "messages": len(chunk),
-                "chars": sum(len(item["text"]) for item in chunk),
-                "sha256": hashlib.sha256("\n".join(item["text"] for item in chunk).encode()).hexdigest(),
-            }
-            for index, chunk in enumerate(chunks, 1)
-        ]
-        if args.dry_run:
-            audit["status"] = "dry_run"
-            results.append(audit)
-            _atomic_json(_session_audit_path(session["session_id"]), audit)
-            continue
-        partials = []
-        failed = None
-        invocation_start = len(invocations)
-        for index, chunk in enumerate(chunks, 1):
-            payload, attempt_records = run_executor_with_retries(
-                executor_name, preset, _partial_prompt(session["target"], chunk, index, len(chunks)),
-                session["target"]["repo_root"], run_id, f"{session['session_id']}:chunk:{index}",
-                int(config.get("max_attempts", 2)),
-            )
-            invocations.extend(attempt_records)
-            if payload is None:
-                failed = attempt_records[-1].get("error", "chunk summary failed")
-                break
-            partials.append(payload)
-        if not failed:
-            final_payload, attempt_records = run_executor_with_retries(
-                executor_name, preset, _final_prompt(session["target"], partials),
-                session["target"]["repo_root"], run_id, f"{session['session_id']}:final",
-                int(config.get("max_attempts", 2)),
-            )
-            invocations.extend(attempt_records)
-            if final_payload is None:
-                failed = attempt_records[-1].get("error", "final summary failed")
-        if not failed:
-            try:
-                audit["apply_result"] = _apply_summary(session["target"], final_payload)
-                audit["status"] = "done"
-                audit["cursor_after"] = session["end_offset"]
-                _atomic_json(_state_path(session["session_id"]), {
-                    "schema_version": SCHEMA_VERSION,
-                    "session_id": session["session_id"],
-                    "path": session["path"],
-                    "processed_offset": session["end_offset"],
-                    "raw_size": session["size"],
-                    "sha256": hashlib.sha256(Path(session["path"]).read_bytes()).hexdigest(),
-                    "session_usage": session["session_usage"],
-                    "internal_marker": session["internal_marker"],
-                    "repo_key": session["target"]["repo_key"],
-                    "branch": session["target"]["branch"],
-                    "updated_at": now_iso(),
-                })
-            except Exception as exc:
-                failed = str(exc)
-        if failed:
-            audit["status"] = "failed"
-            audit["error"] = failed
-        audit["summary_usage"], audit["usage_unavailable_invocations"] = _sum_usage(invocations[invocation_start:])
-        audit["executor"] = executor_name
-        audit["model"] = preset.get("model")
-        results.append(audit)
-        _atomic_json(_session_audit_path(session["session_id"]), audit)
-    usage, unavailable = _sum_usage(invocations)
-    run = {
-        "schema_version": SCHEMA_VERSION,
-        "run_id": run_id,
-        "started_at": dt.datetime.fromtimestamp(started, dt.timezone.utc).isoformat(),
-        "finished_at": now_iso(),
-        "duration_ms": int((time.time() - started) * 1000),
-        "dry_run": bool(args.dry_run),
-        "scheduled": bool(getattr(args, "scheduled", False)),
-        "activity": activity,
-        "executor": executor_name,
-        "model": preset.get("model") if preset else None,
-        "profile": preset.get("profile") if preset else None,
-        "session_count": len(results),
-        "candidate_count": len(candidates),
-        "done_count": sum(item["status"] == "done" for item in results),
-        "failed_count": sum(item["status"] == "failed" for item in results),
-        "skipped_count": sum(item["status"] == "skipped" for item in results),
-        "raw_bytes": sum(item["raw_size"] for item in results),
-        "new_bytes": sum(item["new_bytes"] for item in results),
-        "semantic_messages": sum(item["semantic_messages"] for item in results),
-        "semantic_chars": sum(item["semantic_chars"] for item in results),
-        "summary_usage": usage,
-        "usage_unavailable_invocations": unavailable,
-        "invocations": invocations,
-        "sessions": results,
-    }
-    _persist_scan_run(run, "scan_completed")
-    print(json.dumps(run, ensure_ascii=False, indent=2) if args.json else _format_run(run))
-    return 1 if run["failed_count"] else 0
+    return _execute_sessions(config, args, sessions, run_id, started, activity=activity)
 
 
 def _format_tokens(usage):
@@ -976,14 +1198,32 @@ def _format_run(run):
             f"idle_seconds={activity.get('idle_seconds')} threshold={activity.get('threshold_seconds')}"
         )
     return (
-        f"run {run['run_id']}: {run['done_count']} done, {run['failed_count']} failed, "
-        f"{run['skipped_count']} skipped; {run['new_bytes']} new bytes; "
+        f"run {run['run_id']}: {run['done_count']} done, "
+        f"{run.get('summary_skipped_count', 0)} summary-skipped, {run['failed_count']} failed, "
+        f"{run.get('discovery_skipped_count', run['skipped_count'])} discovery-skipped; "
+        f"{run.get('eligible_new_bytes', run['new_bytes'])} eligible / "
+        f"{run.get('observed_new_bytes', run['new_bytes'])} observed new bytes; "
         f"summary tokens {_format_tokens(run.get('summary_usage'))}"
     )
 
 
 def _runs():
     return [value for path in sorted((SCAN_ROOT / "runs").glob("*.json"), reverse=True) if isinstance((value := _read_json(path)), dict)]
+
+
+def _covered_bytes(intervals):
+    total = 0
+    end = None
+    for start, stop in sorted(intervals):
+        if stop <= start:
+            continue
+        if end is None or start > end:
+            total += stop - start
+            end = stop
+        elif stop > end:
+            total += stop - end
+            end = stop
+    return total
 
 
 def command_stats(args):
@@ -1003,15 +1243,49 @@ def command_stats(args):
             key = session.get("repo_key")
             if not key or (args.repo and key != args.repo):
                 continue
-            item = repos.setdefault(key, {"repo_key": key, "scan_count": 0, "sessions": set(), "raw_bytes": 0, "new_bytes": 0, "summary_tokens": 0})
+            item = repos.setdefault(key, {
+                "repo_key": key,
+                "scan_count": 0,
+                "sessions": set(),
+                "intervals": {},
+                "raw_bytes": 0,
+                "new_bytes": 0,
+                "observed_new_bytes": 0,
+                "eligible_new_bytes": 0,
+                "skipped_new_bytes": 0,
+                "summary_tokens": 0,
+                "done_count": 0,
+                "summary_skipped_count": 0,
+                "failed_count": 0,
+                "empty_apply_count": 0,
+            })
             item["scan_count"] += 1
-            item["sessions"].add(session.get("session_id"))
+            session_id = session.get("session_id")
+            item["sessions"].add(session_id)
             item["raw_bytes"] += int(session.get("raw_size", 0))
-            item["new_bytes"] += int(session.get("new_bytes", 0))
+            observed = int(session.get("new_bytes", 0))
+            item["new_bytes"] += observed
+            item["observed_new_bytes"] += observed
+            if session.get("status") == "skipped":
+                item["skipped_new_bytes"] += observed
+            else:
+                item["eligible_new_bytes"] += observed
+            start = int(session.get("cursor_before", 0))
+            stop = min(int(session.get("raw_size", start + observed)), start + observed)
+            item["intervals"].setdefault(session_id, []).append((start, stop))
             item["summary_tokens"] += int((session.get("summary_usage") or {}).get("total_tokens", 0))
+            status = session.get("status")
+            item["done_count"] += int(status == "done")
+            item["summary_skipped_count"] += int(status == "skipped_summary")
+            item["failed_count"] += int(status == "failed")
+            item["empty_apply_count"] += int(
+                status == "done"
+                and not (session.get("apply_result") or {}).get("touched_targets")
+            )
     repo_rows = []
     for item in repos.values():
         item["session_count"] = len(item.pop("sessions"))
+        item["unique_new_bytes"] = sum(_covered_bytes(value) for value in item.pop("intervals").values())
         repo_rows.append(item)
     payload = {"run_count": len(runs), "summary_usage": total_usage or None, "usage_unavailable_invocations": unavailable, "repos": sorted(repo_rows, key=lambda x: x["repo_key"])}
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -1031,6 +1305,81 @@ def command_show(args):
     if not isinstance(value, dict):
         raise RuntimeError(f"run not found: {args.run_id}")
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def _replay_session(source_run_id, audit):
+    session_id = audit.get("session_id")
+    path = Path(audit.get("path") or "").expanduser()
+    if not path.is_file():
+        matches = [
+            candidate
+            for root in (CODEX_HOME / "sessions", CODEX_HOME / "archived_sessions")
+            if root.exists()
+            for candidate in root.rglob(f"*{session_id}*.jsonl")
+        ]
+        if not matches:
+            raise RuntimeError(f"session transcript not found: {session_id}")
+        path = max(matches, key=lambda item: (item.stat().st_size, item.stat().st_mtime))
+    cursor_before = int(audit.get("cursor_before", 0))
+    cursor_after = int(audit.get("cursor_after") or audit.get("raw_size") or 0)
+    parsed = parse_codex_session(path, cursor_before)
+    if cursor_after <= cursor_before or cursor_after > parsed["size"]:
+        raise RuntimeError(
+            f"invalid replay cursor for {session_id}: {cursor_before}..{cursor_after}, size={parsed['size']}"
+        )
+    parsed["messages"] = [
+        item for item in parsed["messages"]
+        if item["start_offset"] >= cursor_before and item["end_offset"] <= cursor_after
+    ]
+    parsed["size"] = cursor_after
+    parsed["end_offset"] = cursor_after
+    parsed["session_usage"] = audit.get("session_usage") or parsed.get("session_usage")
+    meta = dict(parsed.get("meta") or {})
+    if audit.get("cwd"):
+        meta["cwd"] = audit["cwd"]
+    parsed["meta"] = meta
+    target, target_error = resolve_target(meta.get("cwd"))
+    return {
+        **parsed,
+        "session_id": session_id,
+        "cursor_before": cursor_before,
+        "new_bytes": cursor_after - cursor_before,
+        "target": target,
+        "status": "candidate" if not target_error else "skipped",
+        "reason": target_error,
+        "replay_source": {
+            "run_id": source_run_id,
+            "previous_status": audit.get("status"),
+            "previous_apply_empty": not bool((audit.get("apply_result") or {}).get("touched_targets")),
+        },
+    }
+
+
+def command_replay(args):
+    config = load_config()
+    validation = validate_config(config)
+    if not validation["valid"]:
+        raise RuntimeError("; ".join(validation["errors"]))
+    source_path = SCAN_ROOT / "runs" / f"{args.run_id}.json"
+    source_run = _read_json(source_path)
+    if not isinstance(source_run, dict):
+        raise RuntimeError(f"run not found: {args.run_id}")
+    requested = list(dict.fromkeys(args.session_id))
+    audits = {item.get("session_id"): item for item in source_run.get("sessions", [])}
+    missing = [session_id for session_id in requested if session_id not in audits]
+    if missing:
+        raise RuntimeError(f"sessions not found in run {args.run_id}: {', '.join(missing)}")
+    sessions = [_replay_session(args.run_id, audits[session_id]) for session_id in requested]
+    run_id = dt.datetime.now().strftime("%Y%m%dT%H%M%S") + f"-replay-{os.getpid()}"
+    return _execute_sessions(
+        config,
+        args,
+        sessions,
+        run_id,
+        time.time(),
+        run_kind="replay",
+        replay_source={"run_id": args.run_id, "session_ids": requested},
+    )
 
 
 def _cli_path():
@@ -1128,6 +1477,10 @@ def command_config(args):
         if args.minutes < 1:
             raise RuntimeError("active minutes must be at least 1")
         config["active_within_minutes"] = args.minutes
+    elif args.config_command == "set-timeout":
+        if args.seconds < 30:
+            raise RuntimeError("timeout seconds must be at least 30")
+        config["invocation_timeout_seconds"] = args.seconds
     elif args.config_command == "set-active-check":
         config["skip_when_computer_active"] = args.enabled == "on"
     save_scan_config(config)
@@ -1145,6 +1498,7 @@ def build_parser():
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--json", action="store_true")
     run.add_argument("--scheduled", action="store_true", help="Apply computer activity guard before scanning")
+    run.add_argument("--executor", help="Override the configured executor for this run only")
     sub.add_parser("install")
     sub.add_parser("status")
     stats = sub.add_parser("stats")
@@ -1157,6 +1511,12 @@ def build_parser():
     history.add_argument("--json", action="store_true")
     show = sub.add_parser("show")
     show.add_argument("run_id")
+    replay = sub.add_parser("replay")
+    replay.add_argument("--run-id", required=True)
+    replay.add_argument("--session-id", action="append", required=True)
+    replay.add_argument("--dry-run", action="store_true")
+    replay.add_argument("--json", action="store_true")
+    replay.add_argument("--executor", help="Override the configured executor for this replay only")
     sub.add_parser("uninstall")
     config = sub.add_parser("config")
     config_sub = config.add_subparsers(dest="config_command", required=True)
@@ -1172,6 +1532,8 @@ def build_parser():
     set_schedule.add_argument("times", nargs="+")
     set_active_minutes = config_sub.add_parser("set-active-minutes")
     set_active_minutes.add_argument("minutes", type=int)
+    set_timeout = config_sub.add_parser("set-timeout")
+    set_timeout.add_argument("seconds", type=int)
     set_active_check = config_sub.add_parser("set-active-check")
     set_active_check.add_argument("enabled", choices=("on", "off"))
     return parser
@@ -1186,6 +1548,7 @@ def main():
         "stats": command_stats,
         "history": command_history,
         "show": command_show,
+        "replay": command_replay,
         "uninstall": command_uninstall,
         "config": command_config,
     }
