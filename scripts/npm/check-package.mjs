@@ -42,6 +42,8 @@ for (const relPath of [
   "lib/dev_memory_branch.py",
   "lib/dev_memory_summary.py",
   "lib/dev_memory_session_scan.py",
+  "lib/maintenance/tidy.md",
+  "lib/maintenance/archive.md",
   "hooks/hooks.json",
   "hooks/codex-hooks.json",
   "suite-manifest.json",

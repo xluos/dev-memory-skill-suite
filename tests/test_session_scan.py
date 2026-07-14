@@ -110,6 +110,12 @@ def test_internal_marker_is_detected(tmp_path):
     assert scan.parse_codex_session(transcript)["internal_marker"] is True
 
 
+def test_maintenance_agent_marker_is_detected(tmp_path):
+    transcript = tmp_path / "maintenance.jsonl"
+    _codex_transcript(transcript, [("user", scan.MAINTENANCE_MARKER), ("assistant", "开始整理")])
+    assert scan.parse_codex_session(transcript)["internal_marker"] is True
+
+
 def test_config_defaults_include_three_executors():
     config = scan.default_scan_config()
     assert config["executor"] == "auto"

@@ -96,9 +96,11 @@
 - 共享背景按需看 repo
 - 原始事实最后才回源
 
-## 各 Skill 现在的职责
+## 常驻 Skill 与按需维护
 
-> 0.16 起取消 `using-dev-memory` 路由总入口；0.17 起取消旧 `dev-memory-context` 读取 skill。现在提供更窄的 `dev-memory-read`：只负责主动定位和搜索当前 repo 的记忆文件，不承担 SessionStart context 注入，也不写入。CLI 命令 `dev-memory-cli context show` / `context sync` 仍然保留（hook 内部和脚本场景仍要用）。当前套件 5 个 skill。
+当前套件只提供一个常驻 Skill：`dev-memory-read`。它只负责主动定位和搜索当前 repo 的记忆文件，不承担 SessionStart 注入，也不写入。
+
+会话里的稳定语义由定期 `session-scan` 在后台对照已有记忆后统一写入。原来的 capture/setup/tidy/graduate 不再作为全局 Skill 暴露：底层 CLI 仍然保留，整理与归档说明由 `maintain` 命令临时注入独立 Agent 会话。
 
 ### `dev-memory-read`
 
@@ -113,46 +115,35 @@ dev-memory-cli read search --repo <repo-path> --query "关键词"
 
 它不创建新骨架，不修改文件，不扫描整个用户目录。
 
-### `dev-memory-setup`
+### 初始化
 
-初始化用户目录下的 repo+branch 结构。
+记忆是 repo 级 opt-in。首次启用运行：
 
-它会：
+```bash
+dev-memory-cli init --repo <repo-path>
+```
 
-- 创建 repo 层和 branch 层骨架
-- 为当前仓库记录 storage root
-- 在存在旧 `.dev-memory/<branch>/` 时迁移 branch 资料
+初始化是确定性 CLI 动作，不需要 Agent Skill。
 
-### `dev-memory-update`
+### 整理
 
-把当前会话里已经稳定的新理解写回记忆。
+```bash
+dev-memory-cli maintain tidy --repo <repo-path> --scope branch
+```
 
-默认：
+CLI 启动独立交互式 Agent，并注入完整整理流程。该 Agent 处理 unsorted 分类、结构化条目 proposals、HTML 人工审核和 apply 后复核。破坏性修改不得跳过 HTML review。
 
-- 分支级目标、进展、风险、下一步 → branch 文件
-- 共享资料入口 → repo `sources.md`
+### 归档
 
-另外也支持显式写共享层：
+```bash
+dev-memory-cli maintain archive --repo <repo-path> --branch <branch-name>
+```
 
-- `shared-overview`
-- `shared-constraint`
-- `shared-context`
-- `shared-decision`
-- `shared-source`
+CLI 启动独立交互式 Agent，执行 graduate dry-run、harvest 草案审核、显式确认和归档复核。普通开发会话不会因“需求做完了”等自然语言自动触发归档。
 
-### `dev-memory-sync`
+### 底层写入
 
-在提交相关检查点沉淀 durable memory。
-
-它的重点不是记历史，而是保留：
-
-- 当前进展
-- 风险
-- 下一步
-- 关键决策
-- 新增资料入口
-
-Git 自动导航仍然主要落在 branch 层，repo 层只更新轻量元信息。
+`capture`、`setup`、`tidy`、`graduate` 子命令继续存在，供 session-scan、维护 Agent、脚本和故障修复使用。它们是 CLI 原语，不再是常驻 Skill。
 
 ## 设计重点
 

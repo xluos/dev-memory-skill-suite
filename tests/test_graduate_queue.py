@@ -61,8 +61,12 @@ def test_graduate_apply_waits_behind_repo_queue(branch_dir, tmp_repo, tmp_storag
     with lock_path.open("a+", encoding="utf-8") as lock_fh:
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
         proc = _popen_graduate_apply(tmp_repo, tmp_storage_root, harvest_file)
+        # Give the child enough time to finish Python startup and pre-flight,
+        # then prove it is blocked on the queue lock. A 200ms window was
+        # flaky on loaded machines and could release the lock before the
+        # child had attempted flock(), producing a false queue_waited=false.
         with pytest.raises(subprocess.TimeoutExpired):
-            proc.communicate(timeout=0.2)
+            proc.communicate(timeout=1.0)
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
         stdout, stderr = proc.communicate(timeout=5)
 

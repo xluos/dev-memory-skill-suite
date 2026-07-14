@@ -1,5 +1,7 @@
 # Workspace Mode Design
 
+> Historical implementation plan. Skill names in the file-touch inventory describe the v1 design; current architecture keeps only `dev-memory-read` as a global Skill and routes maintenance through `dev-memory-cli maintain`.
+
 Add a multi-repo mode to dev-memory: when cwd is not a git repo but contains git repos in first-level subdirectories, treat cwd as a workspace and operate on all repos within it. Single-repo behavior is unchanged.
 
 ## Motivation

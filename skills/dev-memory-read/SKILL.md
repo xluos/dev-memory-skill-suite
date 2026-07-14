@@ -111,10 +111,11 @@ npx dev-memory-cli read search --scope archived --query "..."
 
 ## 和其他 skill 的边界
 
-- 只读：用 `dev-memory-read`
-- 写入 / 改写 / checkpoint：用 `dev-memory-capture`
-- 未分类条目整理：用 `dev-memory-setup`
-- 批量清理旧条目：用 `dev-memory-tidy`
-- 分支收尾归档 + 上提共享层：用 `dev-memory-graduate`
+- 主动定位和读取：使用当前 `dev-memory-read` skill。
+- 会话语义写入：由定期 `session-scan` 后台处理，不要求普通开发 Agent 在会话中即时写盘。
+- 初始化记忆：显式运行 `dev-memory-cli init`。
+- 整理未分类内容或清理旧条目：显式运行 `dev-memory-cli maintain tidy`，由 CLI 启动独立维护 Agent。
+- 分支知识上提与归档：显式运行 `dev-memory-cli maintain archive`，由 CLI 启动独立维护 Agent。
+- `capture` / `setup` / `tidy` / `graduate` 子命令是后台总结和维护 Agent 使用的低层 CLI，不是常驻 skill。
 
 `dev-memory-read` 不会创建新记忆骨架，也不会修改任何文件。

@@ -490,13 +490,12 @@ def _extract_sections(paths, keys, *, repo_newest_first=False):
 
 def _build_context_from_assets(assets, *, full=True, heading=None, brief_profile="standard"):
     if not assets["branch_dir"].exists():
-        # v2: capture lazy-inits on first write, so branch_dir typically
-        # exists after any real interaction. Missing here just means no
-        # write has happened yet — no need to push setup.
+        # Memory is opt-in. A missing branch directory stays silent in
+        # workspace briefs; the primary repo gets a concise init hint.
         if heading is None:
             return (
                 "当前仓库+分支还没有 dev-memory 记忆。"
-                "下一次 `dev-memory-capture` 写入时会自动 lazy init；现有结论若值得记一笔，直接走 capture。"
+                "需要启用时运行 `dev-memory-cli init`；之后由定期 session-scan 沉淀会话语义。"
             )
         return None
 
@@ -617,7 +616,7 @@ def _build_context_from_assets(assets, *, full=True, heading=None, brief_profile
                 "",
                 f"归档分支查询：`grep -r 'KEYWORD' {archive_dir}/` （体量大时派 Task 子 agent）",
             ])
-        footer_lines.extend(["", "新决策 / 进展 / 阻塞 → `dev-memory-capture` 写入。"])
+        footer_lines.extend(["", "新增会话语义由定期 session-scan 沉淀；主动查旧记忆使用 `dev-memory-read`。"])
         parts.append("\n".join(footer_lines))
 
     return "\n\n".join(parts)

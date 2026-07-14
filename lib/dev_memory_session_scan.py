@@ -29,6 +29,8 @@ PLIST_PATH = Path(os.environ.get(
     "~/Library/LaunchAgents/com.dev-memory.session-scan.plist",
 )).expanduser()
 INTERNAL_MARKER = "DEV_MEMORY_INTERNAL_SESSION_SUMMARY_V1"
+MAINTENANCE_MARKER = "DEV_MEMORY_INTERNAL_MAINTENANCE_AGENT_V1"
+INTERNAL_MARKERS = (INTERNAL_MARKER, MAINTENANCE_MARKER)
 SUMMARY_MUTATION_FIELDS = (
     "file_map",
     "decisions",
@@ -360,7 +362,7 @@ def parse_codex_session(path, since_offset=0):
                 if usage:
                     total_usage = usage
             message = _semantic_message(obj)
-            if message and INTERNAL_MARKER in message["text"]:
+            if message and any(marker in message["text"] for marker in INTERNAL_MARKERS):
                 internal_marker = True
             if message and end > since_offset:
                 message.update({"start_offset": start, "end_offset": end})

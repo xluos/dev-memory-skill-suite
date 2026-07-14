@@ -54,4 +54,6 @@ trusted publisher 比老式 NPM_TOKEN publish 多一道校验：npm registry 会
 
 - `AGENTS.md` 是 v1-era 设计文档，部分概念（如 `dev-memory-context` / `dev-memory-sync` / `dev-memory-update`）已被淘汰
 - 现行架构看 `README.md` 和 `docs/dev-memory-skill-suite-guide.md`
-- 各 skill 的 SKILL.md 在 `skills/<skill-name>/SKILL.md`
+- 常驻读取 Skill 在 `skills/dev-memory-read/SKILL.md`
+- 按需维护 Agent prompt 在 `lib/maintenance/{tidy,archive}.md`，由 `dev-memory-cli maintain` 注入独立会话
+- `capture/setup/tidy/graduate` 是底层 CLI 原语，不再作为全局 Skill 安装

@@ -8,8 +8,8 @@ What it does (idempotent, with --dry-run):
   2) Rename .dev-assets-id markers -> .dev-memory-id (in well-known locations + scan paths)
   3) For every git repo passed via --scan: rename git config keys
      dev-assets.{root,dir} -> dev-memory.{root,dir}
-  4) Recreate skill symlinks under ~/.claude/skills/ and ~/.agents/skills/:
-        dev-assets-* -> dev-memory-*  (only if they pointed into this repo)
+  4) Recreate the read-skill symlink and remove retired write/maintenance
+     skill symlinks under ~/.claude/skills/ and ~/.agents/skills/
   5) Rewrite hook commands "npx dev-assets ..." -> "npx dev-memory-cli ..." in:
         ~/.claude/settings.json
         ~/.codex/hooks.json
@@ -229,19 +229,29 @@ SKILL_LINK_DIRS = [
 
 # These are the rename pairs for symlinks. Source name -> new name.
 SKILL_RENAMES = [
-    ("using-dev-assets", "using-dev-memory"),
-    ("dev-assets-setup", "dev-memory-setup"),
-    ("dev-assets-context", "dev-memory-context"),
-    ("dev-assets-capture", "dev-memory-capture"),
-    ("dev-assets-graduate", "dev-memory-graduate"),
-    ("dev-assets-tidy", "dev-memory-tidy"),
+    ("dev-assets-context", "dev-memory-read"),
+    ("dev-memory-context", "dev-memory-read"),
 ]
+
+RETIRED_SKILL_NAMES = {
+    "using-dev-assets", "using-dev-memory",
+    "dev-assets-setup", "dev-memory-setup",
+    "dev-assets-capture", "dev-memory-capture",
+    "dev-assets-graduate", "dev-memory-graduate",
+    "dev-assets-tidy", "dev-memory-tidy",
+}
 
 
 def migrate_skill_symlinks(dry):
     for skills_dir in SKILL_LINK_DIRS:
         if not skills_dir.exists():
             continue
+        for retired_name in sorted(RETIRED_SKILL_NAMES):
+            retired_link = skills_dir / retired_name
+            if retired_link.is_symlink():
+                log(f"remove retired skill symlink {retired_link}", dry=dry)
+                if not dry:
+                    retired_link.unlink()
         for old_name, new_name in SKILL_RENAMES:
             old_link = skills_dir / old_name
             new_link = skills_dir / new_name

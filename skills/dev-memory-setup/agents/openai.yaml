@@ -1,4 +1,0 @@
-interface:
-  display_name: "Dev Memory Setup"
-  short_description: "初始化用户目录下的 repo+branch 开发记忆目录并收集关键入口信息"
-  default_prompt: "Use $dev-memory-setup to initialize user-home repo+branch development memory for the current Git repository."

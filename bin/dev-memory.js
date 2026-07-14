@@ -376,6 +376,112 @@ function commandPySubcommand(name, rawArgs) {
   runPython(scriptPath, rawArgs);
 }
 
+const MAINTENANCE_MODES = new Set(["tidy", "archive"]);
+const MAINTENANCE_MARKER = "DEV_MEMORY_INTERNAL_MAINTENANCE_AGENT_V1";
+
+function maintenanceHelp() {
+  process.stdout.write(`Usage:
+  dev-memory-cli maintain tidy [--repo PATH] [--branch NAME] [--scope branch|branch+repo]
+                                  [--executor auto|codex|coco] [--model MODEL]
+  dev-memory-cli maintain archive [--repo PATH] [--branch NAME]
+                                     [--executor auto|codex|coco] [--model MODEL]
+  dev-memory-cli maintain <tidy|archive> --print-prompt [other options]
+
+The command starts a dedicated interactive maintenance-agent session. Tidy
+must not apply destructive changes before HTML review; archive must not apply
+before dry-run review and explicit confirmation.
+`);
+}
+
+function resolveMaintenanceExecutor(requested) {
+  const name = requested || process.env.DEV_MEMORY_MAINTENANCE_EXECUTOR || "auto";
+  if (!new Set(["auto", "codex", "coco"]).has(name)) {
+    fail(`unsupported maintenance executor: ${name}`);
+  }
+  if (name !== "auto") return name;
+  for (const candidate of ["codex", "coco"]) {
+    if (commandExists(candidate)) return candidate;
+  }
+  fail("no maintenance executor found; install codex/coco or use --print-prompt");
+}
+
+function buildMaintenancePrompt(mode, options, repoRoot) {
+  const promptPath = packageScript("lib", "maintenance", `${mode}.md`);
+  if (!fs.existsSync(promptPath)) fail(`missing maintenance prompt: ${promptPath}`);
+  const workflow = fs.readFileSync(promptPath, "utf8").trim();
+  const cliPath = path.resolve(process.argv[1]);
+  const branch = options.branch || "<current-git-branch>";
+  const scope = mode === "tidy" ? (options.scope || "branch") : "branch";
+  return `${MAINTENANCE_MARKER}
+
+你是 dev-memory 的专用维护 Agent。本会话只处理下面指定仓库的记忆维护，不承担普通开发任务。
+
+目标仓库：${repoRoot}
+目标分支：${branch}
+维护模式：${mode}
+整理范围：${scope}
+本次必须使用的 CLI：node ${JSON.stringify(cliPath)}
+
+不要依赖全局 dev-memory capture/setup/tidy/graduate Skill；完整维护流程已经随本提示提供。
+涉及删除、改写或归档时，必须遵守下面流程中的人工审核和确认门禁。
+
+${workflow}
+`;
+}
+
+function commandMaintain(rawArgs) {
+  const mode = rawArgs[0];
+  if (!mode || mode === "--help" || mode === "-h") {
+    maintenanceHelp();
+    return;
+  }
+  if (!MAINTENANCE_MODES.has(mode)) {
+    fail(`unknown maintenance mode: ${mode}`);
+  }
+  const { positional, options } = parseArgs(rawArgs.slice(1));
+  if (positional.length) fail(`unexpected maintenance argument: ${positional[0]}`);
+  const repoRoot = path.resolve(options.repo || process.cwd());
+  if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+    fail(`maintenance repo does not exist: ${repoRoot}`);
+  }
+  if (mode === "tidy" && options.scope && !new Set(["branch", "branch+repo"]).has(options.scope)) {
+    fail(`unsupported tidy scope: ${options.scope}`);
+  }
+  const prompt = buildMaintenancePrompt(mode, options, repoRoot);
+  if (options["print-prompt"] || options["dry-run"]) {
+    process.stdout.write(prompt);
+    return;
+  }
+
+  const executor = resolveMaintenanceExecutor(options.executor);
+  let args;
+  if (executor === "codex") {
+    const modelArgs = options.model ? ["--model", String(options.model)] : [];
+    args = [
+      "-C", repoRoot,
+      "--sandbox", "danger-full-access",
+      "--ask-for-approval", "on-request",
+      "--dangerously-bypass-hook-trust",
+      ...modelArgs,
+      prompt,
+    ];
+  } else {
+    const modelArgs = options.model ? ["--config", `model=${String(options.model)}`] : [];
+    args = ["--permission-mode", "default", ...modelArgs, prompt];
+  }
+  const result = spawnSync(executor, args, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      DEV_MEMORY_MAINTENANCE_AGENT: "1",
+      DEV_MEMORY_MAINTENANCE_MODE: mode,
+    },
+    stdio: "inherit",
+  });
+  if (result.error) fail(`unable to start ${executor}: ${result.error.message}`);
+  if (result.status !== 0) process.exit(result.status || 1);
+}
+
 function branchScript() {
   return packageScript("lib", "dev_memory_branch.py");
 }
@@ -692,8 +798,11 @@ function printHelp() {
   dev-memory-cli install-hooks --all [--repo PATH] [--global]
   dev-memory-cli ui [--port N] [--host HOST] [--no-open] [--read-only]
   dev-memory-cli workspace <show|primary> [...]
+  dev-memory-cli init [--repo PATH] [--branch NAME]
   dev-memory-cli read <show|search> [...]
+  dev-memory-cli maintain <tidy|archive> [...]   # starts a dedicated interactive agent
   dev-memory-cli context <show|...> [...]
+  # Low-level mutation/admin commands used by session-scan and maintenance agents:
   dev-memory-cli capture <record|show|sync-working-tree|record-head|suggest-kind|classify> [...]
   dev-memory-cli setup <init|merge-unsorted|mark-completed> [...]
   dev-memory-cli graduate <dry-run|apply|index> [...]
@@ -717,6 +826,14 @@ function main() {
   }
   if (PY_SUBCOMMAND_SCRIPTS[command]) {
     commandPySubcommand(command, argv.slice(1));
+    return;
+  }
+  if (command === "init") {
+    commandPySubcommand("setup", ["init", ...argv.slice(1)]);
+    return;
+  }
+  if (command === "maintain") {
+    commandMaintain(argv.slice(1));
     return;
   }
   if (command === "branch") {

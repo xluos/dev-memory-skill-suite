@@ -1,4 +1,0 @@
-interface:
-  display_name: "Dev Memory Tidy"
-  short_description: "整理已结构化的分支/仓库记忆：浏览器审阅 keep/delete/edit，导出 plan.json 后 apply 落盘并自动备份。"
-  default_prompt: "Use $dev-memory-tidy to review and groom existing dev-memory memory entries — load the prepare output, agent hints (STALE/DUP/OK/UNCLEAR), browser review, then apply with backup."
