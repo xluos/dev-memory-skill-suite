@@ -126,7 +126,7 @@ def _deep_merge(base, override):
 def default_scan_config():
     return {
         "executor": "auto",
-        "order": ["coco", "codex", "claude"],
+        "order": ["claude", "codex"],
         "executors": json.loads(json.dumps(DEFAULT_EXECUTORS)),
         "schedule_times": ["03:00", "13:00"],
         "skip_when_computer_active": True,
