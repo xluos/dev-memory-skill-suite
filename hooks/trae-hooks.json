@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dev-memory-cli hook session-start",
+            "timeout": 20,
+            "statusMessage": "Loading dev-memory context"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dev-memory-cli hook stop",
+            "timeout": 15,
+            "statusMessage": "Updating dev-memory session marker"
+          }
+        ]
+      }
+    ]
+  }
+}

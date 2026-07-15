@@ -116,10 +116,10 @@ def test_maintenance_agent_marker_is_detected(tmp_path):
     assert scan.parse_codex_session(transcript)["internal_marker"] is True
 
 
-def test_config_defaults_include_three_executors():
+def test_config_defaults_prefer_claude_then_codex_and_keep_coco_preset():
     config = scan.default_scan_config()
     assert config["executor"] == "auto"
-    assert config["order"] == ["coco", "codex", "claude"]
+    assert config["order"] == ["claude", "codex"]
     assert set(config["executors"]) == {"coco", "codex", "claude"}
     assert config["schedule_times"] == ["03:00", "13:00"]
     assert config["skip_when_computer_active"] is True

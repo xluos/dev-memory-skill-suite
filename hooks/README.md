@@ -1,16 +1,24 @@
 # Lifecycle Hooks
 
-本项目使用 agent 生命周期 hook，不使用 Git hook。Claude Code 与 Codex 的可用事件不同，模板分别维护。
+本项目使用 agent 生命周期 hook，不使用 Git hook。Claude Code、Codex、Trae 与 Trae CN 的可用事件和配置目录不同，模板分别维护。
 
 ## 当前仓库里的接入方式
 
 - repo-local 配置位置：
   - Claude: `.claude/settings.local.json`
   - Codex: `.codex/hooks.json`
+  - Trae: `.trae/hooks.json`
+  - Trae CN: `.trae-cn/hooks.json`
+- user-level 配置位置：
+  - Claude: `~/.claude/settings.json`
+  - Codex: `~/.codex/hooks.json`
+  - Trae: `~/.trae/hooks.json`
+  - Trae CN: `~/.trae-cn/hooks.json`
 - 可复用模板：
   - Claude: [hooks/hooks.json](hooks.json)
   - Codex: [hooks/codex-hooks.json](codex-hooks.json)
-- `dev-memory-cli` 是这两套配置共用的稳定执行入口
+  - Trae / Trae CN: [hooks/trae-hooks.json](trae-hooks.json)
+- `dev-memory-cli` 是所有配置共用的稳定执行入口
 - hook 仅在模板内容合并到对应 agent 配置后生效
 
 ### Codex 快速安装
@@ -34,18 +42,21 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/xluos/dev-memory-skill-sui
 ```bash
 dev-memory-cli install-hooks codex
 dev-memory-cli install-hooks claude
+dev-memory-cli install-hooks trae
+dev-memory-cli install-hooks trae-cn
+dev-memory-cli install-hooks --all
 ```
 
 已有旧配置如果还写着 `dev-memory hook ...` 或 `npx dev-memory hook ...`，重新执行安装命令会按 hook id 覆盖为 `dev-memory-cli hook ...`。
 
 ## Hook 行为
 
-| 事件 | Codex CLI | Claude Code CLI | 行为 |
-| --- | :-: | :-: | --- |
-| `SessionStart` | ✓ | ✓ | 读取当前 repo+branch 记忆并注入会话；同一 session 的重复触发幂等跳过 |
-| `Stop` | ✓ | ✓ | 每次回复后记录轻量 HEAD marker；Codex 同时登记定时扫描候选 |
-| `PreCompact` |  | ✓ | 兼容占位；当前不执行额外刷新 |
-| `SessionEnd` |  | ✓ | 记录最终 HEAD，创建 transcript 总结任务并启动后台 worker |
+| 事件 | Codex CLI | Claude Code CLI | Trae | Trae CN | 行为 |
+| --- | :-: | :-: | :-: | :-: | --- |
+| `SessionStart` | ✓ | ✓ | ✓ | ✓ | 读取当前 repo+branch 记忆并注入会话；同一 session 的重复触发幂等跳过 |
+| `Stop` | ✓ | ✓ | ✓ | ✓ | 每次回复后记录轻量 HEAD marker；payload 有会话信息时登记扫描候选 |
+| `PreCompact` |  | ✓ |  |  | 兼容占位；当前不执行额外刷新 |
+| `SessionEnd` |  | ✓ |  |  | 记录最终 HEAD，创建 transcript 总结任务并启动后台 worker |
 
 `SessionStart` 的幂等记录位于 `<repo-memory>/jobs/session-start/injected/*.json`。重复触发只记录 skip 日志，不重复注入上下文。
 
@@ -53,7 +64,7 @@ dev-memory-cli install-hooks claude
 
 ### 生效范围
 
-`SessionEnd` 自动总结仅由 **Claude Code CLI** 的生命周期事件触发。Codex CLI hook 模板没有 `SessionEnd`；它的 `Stop` 只登记候选，不在每轮回答后启动模型。Codex Desktop 不使用这组项目 hook。
+`SessionEnd` 自动总结仅由 **Claude Code CLI** 的生命周期事件触发。Codex、Trae 和 Trae CN 模板都不注册 `SessionEnd`；它们的 `Stop` 只做轻量记录，不在每轮回答后启动模型。Codex Desktop 不使用这组项目 hook。
 
 总结任务的触发端与执行端是两个独立概念：
 
@@ -138,13 +149,13 @@ dev-memory-cli session-scan status
 
 ### 执行器配置
 
-`~/.dev-memory/config.json` 中的 `session_scan` 独立配置扫描执行器。默认提供 `coco`、`codex`、`claude` 三个 preset，并按顺序选择第一个已安装且启用的命令：
+`~/.dev-memory/config.json` 中的 `session_scan` 独立配置扫描执行器。默认提供 `coco`、`codex`、`claude` 三个 preset，并按 `claude → codex` 选择第一个已安装且启用的命令；`coco` preset 为兼容保留，可显式加入 `order`：
 
 ```json
 {
   "session_scan": {
     "executor": "auto",
-    "order": ["coco", "codex", "claude"],
+    "order": ["claude", "codex"],
     "schedule_times": ["03:00", "13:00"],
     "skip_when_computer_active": true,
     "active_within_minutes": 10,
@@ -214,6 +225,8 @@ dev-memory-cli session-scan uninstall
 
 - Claude 把 [hooks/hooks.json](hooks.json) 合并到 `.claude/settings.local.json`。
 - Codex CLI 把 [hooks/codex-hooks.json](codex-hooks.json) 合并到 `.codex/hooks.json`。
+- Trae 把 [hooks/trae-hooks.json](trae-hooks.json) 合并到 `.trae/hooks.json`。
+- Trae CN 把同一模板合并到 `.trae-cn/hooks.json`；模板声明 Trae 要求的 `version: 1`。
 - Codex Desktop 通过本地 rollout 定时扫描覆盖，不依赖项目 hook。
 - 其他仓库需要先安装 CLI，再安装对应 hook；hook 运行时统一调用 `dev-memory-cli hook ...`。
 

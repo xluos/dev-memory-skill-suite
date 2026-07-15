@@ -1,6 +1,6 @@
 # Dev Memory Skill Suite
 
-Dev Memory Skill Suite 为 Codex、Claude 等 coding agent 提供跨会话开发记忆能力。
+Dev Memory Skill Suite 为 Codex、Claude Code、Trae / Trae CN 等 coding agent 提供跨会话开发记忆能力。
 
 开发知识存储在用户目录，并按 **仓库身份 + Git 分支** 隔离。分支层保存当前工作的目标、约束和上下文，repo 层保存跨分支长期有效的规则与资料入口。Git 负责提交与代码历史，dev-memory 负责对后续开发仍有价值的语义信息。
 
@@ -57,8 +57,10 @@ npm install -g dev-memory-cli
 # 在当前仓库安装生命周期 hook
 dev-memory-cli install-hooks codex
 dev-memory-cli install-hooks claude
+dev-memory-cli install-hooks trae
+dev-memory-cli install-hooks trae-cn
 
-# 或一次安装两套
+# 或一次安装全部支持的客户端
 dev-memory-cli install-hooks --all
 ```
 
@@ -69,6 +71,8 @@ dev-memory-cli install-hooks --all --global
 ```
 
 CLI 也可通过 `npx -y dev-memory-cli ...` 按需执行。Skill 与 hook 相互独立，安装 skill 不会修改本地 hook 配置。
+
+Trae 的 Hook 配置按客户端隔离：国际版写入 `.trae/hooks.json`，国内版写入 `.trae-cn/hooks.json`；加 `--global` 时分别写入用户目录下的同名路径。已有 Hook 会保留，重复安装只更新 dev-memory 自己的条目。
 
 Codex Desktop 没有本仓库依赖的项目生命周期 hook。安装每日扫描任务可覆盖 Codex CLI 和 Desktop 共同写入的本机会话文件：
 
@@ -178,18 +182,18 @@ git config --local dev-memory.worktreeWriteback true
 
 ## 生命周期 Hook
 
-| 事件 | Codex CLI | Claude Code CLI | 行为 |
-| --- | :-: | :-: | --- |
-| `SessionStart` | ✓ | ✓ | 刷新 Git 派生索引，注入浓缩记忆和完整文件路径；同一 session 幂等 |
-| `Stop` | ✓ | ✓ | 记录轻量 HEAD marker；Codex 同时登记待扫描会话，不启动模型 |
-| `PreCompact` |  | ✓ | 兼容占位，当前不执行额外刷新 |
-| `SessionEnd` |  | ✓ | 记录最终 HEAD，并把 transcript 总结任务放入后台队列 |
+| 事件 | Codex CLI | Claude Code CLI | Trae | Trae CN | 行为 |
+| --- | :-: | :-: | :-: | :-: | --- |
+| `SessionStart` | ✓ | ✓ | ✓ | ✓ | 刷新 Git 派生索引，注入浓缩记忆和完整文件路径；同一 session 幂等 |
+| `Stop` | ✓ | ✓ | ✓ | ✓ | 记录轻量 HEAD marker；有可识别会话信息时登记扫描候选，不启动模型 |
+| `PreCompact` |  | ✓ |  |  | 兼容占位，当前不执行额外刷新 |
+| `SessionEnd` |  | ✓ |  |  | 记录最终 HEAD，并把 transcript 总结任务放入后台队列 |
 
 ### 会话总结
 
-Claude Code CLI 通过 `SessionEnd` 创建后台总结任务。Codex CLI 没有 `SessionEnd`，其 `Stop` hook 只登记候选；Codex Desktop 不依赖 hook。Codex 两种入口统一由每日扫描器读取 `~/.codex/sessions` 和 `~/.codex/archived_sessions`。
+Claude Code CLI 通过 `SessionEnd` 创建后台总结任务。Codex、Trae 和 Trae CN 当前没有该事件：它们的 `Stop` hook 只做轻量记录，并在 payload 带有可识别会话信息时登记扫描候选，不会在每轮回复后启动总结模型。现有定时扫描器只解析 Codex CLI / Desktop 写入的 `~/.codex/sessions` 和 `~/.codex/archived_sessions`；Trae Hook 支持当前覆盖 SessionStart 恢复与轻量 HEAD 刷新，不宣称扫描其私有会话存储。
 
-任务触发端与总结执行端相互独立。Claude 的即时 worker 和 Codex 定时扫描器都可以使用 `coco`、`codex` 或 `claude` CLI。扫描器在 `~/.dev-memory/config.json` 的 `session_scan` 中内置三个可配置 preset，默认按 `coco → codex → claude` 选择第一个可用命令；每个 preset 可指定模型、profile、额外参数和环境变量。
+任务触发端与总结执行端相互独立。Claude 的即时 worker 和 Codex 定时扫描器都可以使用 `coco`、`codex` 或 `claude` CLI。扫描器在 `~/.dev-memory/config.json` 的 `session_scan` 中内置三个可配置 preset，默认按 `claude → codex` 选择第一个可用命令；`coco` preset 继续保留，可显式启用或加入顺序。每个 preset 可指定模型、profile、额外参数和环境变量。
 
 总结输入包含全部尚未处理的 user/assistant 语义消息和现有 dev-memory，不按“最近几条”截尾，也不截断单条消息。长会话按顺序分块并最终归并；工具调用流水账、system 消息和 reasoning 不参与语义总结。输出限定为结构化 JSON，用于新增或修正 decisions、risks、glossary、file map 和 repo 共享记忆；时效性的“当前进展”“下一步”“当前阶段”不会写入。
 
@@ -332,7 +336,7 @@ dev-memory-cli summary <extract-core>
 dev-memory-cli session-scan <run|replay|install|status|stats|history|show|uninstall|config>
 dev-memory-cli hook <session-start|pre-compact|stop|session-end>
 dev-memory-cli ui
-dev-memory-cli install-hooks <codex|claude|--all>
+dev-memory-cli install-hooks <codex|claude|trae|trae-cn|--all>
 ```
 
 具体参数以各子命令的 `--help` 为准。
@@ -358,7 +362,7 @@ lib/maintenance/               # 按需注入独立维护 Agent 的 prompt
 lib/ui-server.js               # 本地管理面板服务
 lib/ui-app.html                # 管理面板前端
 scripts/hooks/                 # 生命周期 hook 实现
-hooks/                         # Codex / Claude hook 模板
+hooks/                         # Codex / Claude Code / Trae hook 模板
 skills/dev-memory-read/        # 唯一常驻 Skill
 tests/                         # Python 测试
 docs/diagrams/                 # README 图表及源文件

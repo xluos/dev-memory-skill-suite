@@ -9,6 +9,7 @@ const PACKAGE_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_STORAGE_ROOT = path.join(os.homedir(), ".dev-memory", "repos");
 const DEFAULT_CONFIG_PATH = process.env.DEV_MEMORY_CONFIG_PATH || path.join(os.homedir(), ".dev-memory", "config.json");
 const WORKSPACE_CONFIG_NAME = ".dev-memory-workspace.json";
+const SUPPORTED_HOOK_AGENTS = ["codex", "claude", "trae", "trae-cn"];
 
 function fail(message) {
   process.stderr.write(`ERROR: ${message}\n`);
@@ -191,32 +192,54 @@ function ensureSessionSummaryConfig() {
 function templatePathForAgent(agent) {
   if (agent === "codex") return packageScript("hooks", "codex-hooks.json");
   if (agent === "claude") return packageScript("hooks", "hooks.json");
+  if (agent === "trae" || agent === "trae-cn") return packageScript("hooks", "trae-hooks.json");
   fail(`unsupported agent: ${agent}`);
 }
 
 function targetPathForAgent(agent, repoRoot) {
   if (agent === "codex") return path.join(repoRoot, ".codex", "hooks.json");
   if (agent === "claude") return path.join(repoRoot, ".claude", "settings.local.json");
+  if (agent === "trae") return path.join(repoRoot, ".trae", "hooks.json");
+  if (agent === "trae-cn") return path.join(repoRoot, ".trae-cn", "hooks.json");
   fail(`unsupported agent: ${agent}`);
 }
 
 function globalTargetPathForAgent(agent) {
   if (agent === "codex") return path.join(os.homedir(), ".codex", "hooks.json");
   if (agent === "claude") return path.join(os.homedir(), ".claude", "settings.json");
+  if (agent === "trae") return path.join(os.homedir(), ".trae", "hooks.json");
+  if (agent === "trae-cn") return path.join(os.homedir(), ".trae-cn", "hooks.json");
   fail(`unsupported agent: ${agent}`);
+}
+
+function hookListIdentity(item) {
+  if (!item || typeof item !== "object") return null;
+  if (typeof item.id === "string" && item.id) {
+    return `id:${item.id}\u0000${item.matcher || ""}`;
+  }
+  const nestedHooks = Array.isArray(item.hooks) ? item.hooks : [];
+  for (const hook of nestedHooks) {
+    const command = hook && typeof hook.command === "string" ? hook.command.trim() : "";
+    const match = command.match(/(?:^|\s)dev-memory-cli\s+hook\s+(session-start|pre-compact|stop|session-end)(?:\s|$)/);
+    if (match) return `dev-memory-command:${match[1]}`;
+  }
+  return null;
 }
 
 function mergeHookLists(existingItems, incomingItems) {
   const merged = existingItems.map((item) => ({ ...item }));
   const index = new Map();
-  merged.forEach((item, i) => index.set(`${item.id || ""}\u0000${item.matcher || ""}`, i));
+  merged.forEach((item, i) => {
+    const key = hookListIdentity(item);
+    if (key) index.set(key, i);
+  });
   for (const item of incomingItems) {
     const copied = { ...item };
-    const key = `${copied.id || ""}\u0000${copied.matcher || ""}`;
-    if (index.has(key)) {
+    const key = hookListIdentity(copied);
+    if (key && index.has(key)) {
       merged[index.get(key)] = copied;
     } else {
-      index.set(key, merged.length);
+      if (key) index.set(key, merged.length);
       merged.push(copied);
     }
   }
@@ -224,7 +247,7 @@ function mergeHookLists(existingItems, incomingItems) {
 }
 
 function mergeConfig(existingConfig, templateConfig) {
-  const result = { ...existingConfig };
+  const result = { ...templateConfig, ...existingConfig };
   const existingHooks = existingConfig.hooks || {};
   const templateHooks = templateConfig.hooks || {};
   const mergedHooks = {};
@@ -272,7 +295,7 @@ function installHooksForAgent(agent, options) {
 
 function commandInstallHooks(positional, options) {
   const isAll = Boolean(options.all);
-  const agents = isAll ? ["codex", "claude"] : [positional[0] || options.agent || "codex"];
+  const agents = isAll ? SUPPORTED_HOOK_AGENTS : [positional[0] || options.agent || "codex"];
   const reports = agents.map((agent) => installHooksForAgent(agent, options));
   process.stdout.write(`${JSON.stringify(isAll ? reports : reports[0], null, 2)}\n`);
 }
@@ -794,7 +817,7 @@ function commandBranch(rawArgs) {
 function printHelp() {
   process.stdout.write(`Usage:
   dev-memory-cli hook <session-start|pre-compact|stop|session-end> [--repo PATH]
-  dev-memory-cli install-hooks <codex|claude> [--repo PATH] [--global]
+  dev-memory-cli install-hooks <codex|claude|trae|trae-cn> [--repo PATH] [--global]
   dev-memory-cli install-hooks --all [--repo PATH] [--global]
   dev-memory-cli ui [--port N] [--host HOST] [--no-open] [--read-only]
   dev-memory-cli workspace <show|primary> [...]

@@ -39,7 +39,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     -h|--help)
       cat <<'EOF'
-Usage: install_codex_hooks.sh [--repo PATH] [--package SPEC] [--agent codex|claude] [--global] [--all]
+Usage: install_codex_hooks.sh [--repo PATH] [--package SPEC] [--agent codex|claude|trae|trae-cn] [--global] [--all]
 
 Thin wrapper that merges hooks for the requested agent via
 `dev-memory-cli install-hooks <agent> [--repo <repo>|--global]`.
@@ -48,10 +48,11 @@ Prefer installing the CLI globally once (e.g. `npm i -g dev-memory-cli`)
 and then running `dev-memory-cli install-hooks <agent>` directly; this script exists
 for environments where a one-shot shell entry is easier.
 
---global writes to the agent's user-level config (~/.codex/hooks.json or
-~/.claude/settings.json); otherwise hooks are merged into the target repo.
+--global writes to the agent's user-level config (~/.codex/hooks.json,
+~/.claude/settings.json, ~/.trae/hooks.json, or ~/.trae-cn/hooks.json);
+otherwise hooks are merged into the target repo.
 
---all installs hooks for both codex and claude in one shot.
+--all installs hooks for all supported agents in one shot.
 EOF
       exit 0
       ;;
@@ -64,9 +65,9 @@ done
 
 if [ "$ALL" -ne 1 ]; then
   case "$AGENT" in
-    codex|claude) ;;
+    codex|claude|trae|trae-cn) ;;
     *)
-      echo "ERROR: unsupported agent: $AGENT (expected codex|claude)" >&2
+      echo "ERROR: unsupported agent: $AGENT (expected codex|claude|trae|trae-cn)" >&2
       exit 1
       ;;
   esac

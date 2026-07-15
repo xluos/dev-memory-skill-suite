@@ -172,6 +172,11 @@ CLI 启动独立交互式 Agent，执行 graduate dry-run、harvest 草案审核
 - Codex:
   - `SessionStart`：恢复 branch 主记忆，并在需要时补 repo 共享层
   - `Stop`：只写轻量 HEAD marker 和最近访问分支
+- Trae / Trae CN:
+  - `SessionStart`：恢复 branch 主记忆，并在需要时补 repo 共享层
+  - `Stop`：只写轻量 HEAD marker；不伪造当前客户端没有提供的 `SessionEnd`
+
+Trae 国际版和国内版分别使用 `.trae/hooks.json` 与 `.trae-cn/hooks.json`，安装器将它们视为两个独立目标。
 
 不适合让 hook 自动重写高语义正文。
 

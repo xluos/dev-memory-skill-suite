@@ -46,6 +46,7 @@ for (const relPath of [
   "lib/maintenance/archive.md",
   "hooks/hooks.json",
   "hooks/codex-hooks.json",
+  "hooks/trae-hooks.json",
   "suite-manifest.json",
   "scripts/hooks/session_start.py",
   "scripts/hooks/session_summary_worker.py",
@@ -83,6 +84,10 @@ run("python3", [
 
 JSON.parse(fs.readFileSync(path.join(repoRoot, "hooks/hooks.json"), "utf8"));
 JSON.parse(fs.readFileSync(path.join(repoRoot, "hooks/codex-hooks.json"), "utf8"));
+const traeHooks = JSON.parse(fs.readFileSync(path.join(repoRoot, "hooks/trae-hooks.json"), "utf8"));
+if (traeHooks.version !== 1) {
+  fail("Trae hooks template must declare version 1");
+}
 JSON.parse(fs.readFileSync(path.join(repoRoot, "suite-manifest.json"), "utf8"));
 
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));

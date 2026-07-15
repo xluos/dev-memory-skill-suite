@@ -13,6 +13,8 @@ What it does (idempotent, with --dry-run):
   5) Rewrite hook commands "npx dev-assets ..." -> "npx dev-memory-cli ..." in:
         ~/.claude/settings.json
         ~/.codex/hooks.json
+        ~/.trae/hooks.json
+        ~/.trae-cn/hooks.json
         plus any --settings <path> the user passes
 
 Usage:
@@ -285,6 +287,8 @@ def migrate_skill_symlinks(dry):
 DEFAULT_SETTINGS_FILES = [
     HOME / ".claude" / "settings.json",
     HOME / ".codex" / "hooks.json",
+    HOME / ".trae" / "hooks.json",
+    HOME / ".trae-cn" / "hooks.json",
 ]
 
 CMD_PATTERNS = [
