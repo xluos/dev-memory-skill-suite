@@ -64,17 +64,55 @@ def test_parser_keeps_all_message_text_and_byte_cursor(tmp_path):
     assert [item["text"] for item in incremental["messages"]] == [long_text, "最后一轮"]
 
 
-def test_chunks_cover_every_message_without_truncation():
+def test_semantic_transcript_keeps_every_message_without_tool_noise(tmp_path):
     messages = [
-        {"role": "user", "text": "a" * 700, "start_offset": 0, "end_offset": 1},
-        {"role": "assistant", "text": "b" * 700, "start_offset": 1, "end_offset": 2},
-        {"role": "user", "text": "c" * 2000, "start_offset": 2, "end_offset": 3},
+        {"role": "user", "text": "用户结论", "timestamp": "2026-07-01T00:00:00Z"},
+        {"role": "assistant", "text": "Agent 主回复", "timestamp": "2026-07-01T00:01:00Z"},
     ]
-    chunks = scan._chunk_messages(messages, 1000)
-    flattened = [message for chunk in chunks for message in chunk]
-    assert "".join(item["text"] for item in flattened) == "a" * 700 + "b" * 700 + "c" * 2000
-    assert len(flattened) == 4
-    assert flattened[-1]["segment_count"] == 2
+    path = scan._write_semantic_transcript(messages, tmp_path)
+    content = path.read_text(encoding="utf-8")
+
+    assert "Message 0001 | role=user" in content
+    assert "Message 0002 | role=assistant" in content
+    assert "用户结论" in content
+    assert "Agent 主回复" in content
+    assert "Tool calls, tool results, commentary, system messages, and reasoning are excluded" in content
+
+
+def test_parser_excludes_assistant_commentary_but_keeps_final_and_legacy_messages(tmp_path):
+    transcript = tmp_path / "rollout.jsonl"
+    rows = [
+        _line({
+            "type": "session_meta",
+            "payload": {"id": "session-1", "cwd": str(tmp_path)},
+        }),
+        _line({
+            "type": "response_item",
+            "payload": {
+                "type": "message", "role": "assistant", "phase": "commentary",
+                "content": [{"type": "output_text", "text": "中间进度"}],
+            },
+        }),
+        _line({
+            "type": "response_item",
+            "payload": {
+                "type": "message", "role": "assistant", "phase": "final",
+                "content": [{"type": "output_text", "text": "最终主回复"}],
+            },
+        }),
+        _line({
+            "type": "response_item",
+            "payload": {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "text", "text": "旧格式主回复"}],
+            },
+        }),
+    ]
+    transcript.write_text("".join(rows), encoding="utf-8")
+
+    parsed = scan.parse_codex_session(transcript)
+
+    assert [item["text"] for item in parsed["messages"]] == ["最终主回复", "旧格式主回复"]
 
 
 def test_codex_executor_is_ephemeral_and_configurable():
@@ -241,13 +279,17 @@ def _candidate_session(tmp_path):
     }
 
 
-def test_single_chunk_uses_one_final_invocation_and_rejects_empty_output(tmp_path, monkeypatch):
+def test_agentic_file_uses_one_final_invocation_and_rejects_empty_output(tmp_path, monkeypatch):
     monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
     monkeypatch.setattr(scan, "choose_executor", lambda _config: ("fake", {"model": None, "profile": None}))
     calls = []
 
     def fake_executor(_name, _preset, prompt, _cwd, _run_id, invocation, _max_attempts):
-        calls.append((prompt, invocation))
+        payload = json.loads(prompt.split("INPUT_JSON:\n", 1)[1])
+        transcript = Path(payload["transcript_path"])
+        assert transcript.exists()
+        assert "记住这个稳定决策" in transcript.read_text(encoding="utf-8")
+        calls.append((prompt, invocation, payload))
         return {}, [{"invocation": invocation, "returncode": 0, "usage": {"total_tokens": 10}}]
 
     monkeypatch.setattr(scan, "run_executor_with_retries", fake_executor)
@@ -264,9 +306,13 @@ def test_single_chunk_uses_one_final_invocation_and_rejects_empty_output(tmp_pat
     assert code == 1
     assert len(calls) == 1
     assert calls[0][1].endswith(":final")
-    assert "直接生成最终 summary-output" in calls[0][0]
+    assert "请自行使用 rg、sed 等只读工具" in calls[0][0]
+    assert "记住这个稳定决策" not in calls[0][0]
+    assert calls[0][2]["message_count"] == 1
+    assert not Path(calls[0][2]["transcript_path"]).exists()
     run = json.loads((scan.SCAN_ROOT / "runs" / "run-1.json").read_text(encoding="utf-8"))
     assert run["sessions"][0]["status"] == "failed"
+    assert run["sessions"][0]["input_mode"] == "agentic_file"
     assert "no memory mutations or skip_reason" in run["sessions"][0]["error"]
     assert not (scan.SCAN_ROOT / "state" / "session-1.json").exists()
 

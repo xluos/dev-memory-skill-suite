@@ -195,7 +195,7 @@ Claude Code CLI 通过 `SessionEnd` 创建后台总结任务。Codex、Trae 和 
 
 任务触发端与总结执行端相互独立。Claude 的即时 worker 和 Codex 定时扫描器都可以使用 `coco`、`codex` 或 `claude` CLI。扫描器在 `~/.dev-memory/config.json` 的 `session_scan` 中内置三个可配置 preset，默认按 `claude → codex` 选择第一个可用命令；`coco` preset 继续保留，可显式启用或加入顺序。每个 preset 可指定模型、profile、额外参数和环境变量。
 
-总结输入包含全部尚未处理的 user/assistant 语义消息和现有 dev-memory，不按“最近几条”截尾，也不截断单条消息。长会话按顺序分块并最终归并；工具调用流水账、system 消息和 reasoning 不参与语义总结。输出限定为结构化 JSON，用于新增或修正 decisions、risks、glossary、file map 和 repo 共享记忆；时效性的“当前进展”“下一步”“当前阶段”不会写入。
+扫描器先把全部尚未处理的 user 消息和 assistant 最终主回复预处理为临时语义稿；工具调用流水账、tool result、assistant commentary、system 消息和 reasoning 不会写入语义稿，旧格式中没有 phase 的 assistant 消息仍按主回复兼容。后台 Agent 的初始 prompt 只包含语义稿与现有 dev-memory 的文件路径、消息数和字符数，由 Agent 使用只读工具自行检索、分段读取，并在一次调用中直接生成最终结果。这样大历史会话不会作为整段 JSON 直接占满初始上下文，也不再为单个长会话串行执行多次分块总结。输出限定为结构化 JSON，用于新增或修正 decisions、risks、glossary、file map 和 repo 共享记忆；时效性的“当前进展”“下一步”“当前阶段”不会写入。
 
 会话总结不是纯追加流程。最终归并会读取当前 branch 和 repo 的已有记忆，再根据新材料选择对应操作：
 
@@ -209,7 +209,7 @@ Claude Code CLI 通过 `SessionEnd` 创建后台总结任务。Codex、Trae 和 
 
 累积型语义 section 默认最多保留最新 200 条，可通过 `DEV_MEMORY_MAX_ENTRIES` 调整；repo 共享决策和长期背景使用更严格的 20 条上限。Markdown 文件维持 oldest-to-newest 的稳定存储顺序，SessionStart 注入时按 newest-to-oldest 选取并排列内容，因此有限的注入窗口始终优先包含最新记忆。overview、file map 等快照型 section 采用覆盖更新，不累积历史版本。事件日志和 artifacts 不计入这项语义条目上限。
 
-扫描游标只在所有分块完成并成功落盘后推进。Codex 执行器强制使用 `--ephemeral`，内部总结 session ID 和 prompt marker 也会被发现阶段排除，避免扫描器递归总结自己产生的会话。完整配置、账本和队列说明见 [hooks/README.md](hooks/README.md#codex-定时扫描)。
+扫描游标只在 Agent 总结成功并完成落盘后推进。不同会话目前仍按顺序应用，避免并发总结同时基于过期记忆产生冲突写入。Codex 执行器强制使用 `--ephemeral`，内部总结 session ID 和 prompt marker 也会被发现阶段排除，避免扫描器递归总结自己产生的会话。完整配置、账本和队列说明见 [hooks/README.md](hooks/README.md#codex-定时扫描)。
 
 常用扫描命令：
 
