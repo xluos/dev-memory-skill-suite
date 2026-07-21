@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from dev_memory_common import get_branch_paths, list_repos_in_workspace, now_iso
+from dev_memory_capture import summary_output_schema_errors
 
 
 SCHEMA_VERSION = 1
@@ -544,31 +545,29 @@ def _looks_like_placeholder_text(value):
 
 
 def _summary_payload_validation_errors(payload):
-    errors = []
+    errors = summary_output_schema_errors(payload)
     if not isinstance(payload, dict):
-        return ["summary output must be an object"]
+        return errors
     for field in ("decisions", "shared_decisions"):
-        for index, item in enumerate(payload.get(field) or []):
+        value = payload.get(field)
+        if value is not None and not isinstance(value, list):
+            continue
+        for index, item in enumerate(value or []):
             if isinstance(item, str):
                 summary = item.strip()
             elif isinstance(item, dict):
                 summary = str(item.get("summary") or item.get("decision") or "").strip()
             else:
                 summary = ""
-            if not summary:
-                errors.append(f"{field}[{index}] requires a non-empty summary")
-            elif _looks_like_placeholder_text(summary):
+            if summary and _looks_like_placeholder_text(summary):
                 errors.append(f"{field}[{index}] contains schema placeholder text")
     for field in ("risks", "glossary", "shared_context", "shared_sources"):
-        for index, item in enumerate(payload.get(field) or []):
-            if not isinstance(item, str) or not item.strip():
-                errors.append(f"{field}[{index}] must be a non-empty string")
-            elif _looks_like_placeholder_text(item):
+        value = payload.get(field)
+        if value is not None and not isinstance(value, list):
+            continue
+        for index, item in enumerate(value or []):
+            if isinstance(item, str) and item.strip() and _looks_like_placeholder_text(item):
                 errors.append(f"{field}[{index}] contains schema placeholder text")
-    for index, item in enumerate(payload.get("file_map") or []):
-        paths = item.get("paths") if isinstance(item, dict) else None
-        if not isinstance(item, dict) or not str(item.get("label") or "").strip() or not paths:
-            errors.append(f"file_map[{index}] requires label and paths")
     return errors
 
 

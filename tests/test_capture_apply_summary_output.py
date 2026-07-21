@@ -111,15 +111,46 @@ def test_apply_summary_output_noop_does_not_update_capture_manifest(branch_dir):
     assert after == before
 
 
-def test_apply_summary_output_ignores_decision_without_summary(branch_dir):
+def test_apply_summary_output_rejects_scalar_array_before_any_write(branch_dir):
+    decisions_path = branch_dir["paths"]["decisions"]
+    repo_glossary_path = branch_dir["paths"]["repo_glossary"]
+    decisions_before = decisions_path.read_text(encoding="utf-8")
+    repo_glossary_before = repo_glossary_path.read_text(encoding="utf-8")
+
+    code, out = _run_apply(branch_dir, {
+        "decisions": [{"summary": "这条不能部分写入"}],
+        "shared_context": "字符串不能被逐字写入",
+    })
+
+    assert code == 1
+    assert "shared_context must be an array" in out["error"]
+    assert decisions_path.read_text(encoding="utf-8") == decisions_before
+    assert repo_glossary_path.read_text(encoding="utf-8") == repo_glossary_before
+
+
+def test_apply_summary_output_preflights_unsupported_kind_before_any_write(branch_dir):
+    decisions_path = branch_dir["paths"]["decisions"]
+    before = decisions_path.read_text(encoding="utf-8")
+
+    code, out = _run_apply(branch_dir, {
+        "decisions": [{"summary": "这条也不能部分写入"}],
+        "upserts": [{"kind": "memory", "content": "非法 kind"}],
+    })
+
+    assert code == 1
+    assert "upserts[0].kind must be one of" in out["error"]
+    assert decisions_path.read_text(encoding="utf-8") == before
+
+
+def test_apply_summary_output_rejects_decision_without_summary(branch_dir):
     before = branch_dir["paths"]["decisions"].read_text(encoding="utf-8")
 
     code, out = _run_apply(branch_dir, {
         "decisions": [{"summary": "", "reason": "不能单独写入的原因"}],
     })
 
-    assert code == 0
-    assert out["touched_targets"] == []
+    assert code == 1
+    assert "decisions[0] requires a non-empty summary" in out["error"]
     assert branch_dir["paths"]["decisions"].read_text(encoding="utf-8") == before
 
 
@@ -159,7 +190,7 @@ def test_apply_summary_output_preflights_targeted_edits(seed_branch_files):
     })
     payload = {
         "rewrites": [
-            {"id": "decisions::0::99", "content": "不存在的 rewrite"},
+            {"id": "decisions::0::99", "content": "不存在的 rewrite", "reason": "测试预检"},
         ],
     }
 

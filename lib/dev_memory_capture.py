@@ -836,6 +836,129 @@ KIND_MAP = {
     "pending": {"file": "pending_promotion", "section": "候选条目", "default_mode": "append"},
 }
 
+SUMMARY_OUTPUT_ALLOWED_FIELDS = {
+    "title",
+    "file_map",
+    "decisions",
+    "risks",
+    "glossary",
+    "shared_decisions",
+    "shared_context",
+    "shared_sources",
+    "upserts",
+    "appends",
+    "rewrites",
+    "deletes",
+    "skip_reason",
+}
+SUMMARY_OUTPUT_ARRAY_FIELDS = (
+    "file_map",
+    "decisions",
+    "risks",
+    "glossary",
+    "shared_decisions",
+    "shared_context",
+    "shared_sources",
+    "upserts",
+    "appends",
+    "rewrites",
+    "deletes",
+)
+
+
+def summary_output_schema_errors(payload):
+    """Validate the complete summary payload before any memory write starts."""
+    if not isinstance(payload, dict):
+        return ["summary output must be an object"]
+
+    errors = []
+    unknown = sorted(set(payload) - SUMMARY_OUTPUT_ALLOWED_FIELDS)
+    if unknown:
+        errors.append(f"unsupported summary output fields: {', '.join(unknown)}")
+
+    for field in ("title", "skip_reason"):
+        if field in payload and (
+            not isinstance(payload[field], str) or not payload[field].strip()
+        ):
+            errors.append(f"{field} must be a non-empty string")
+
+    arrays = {}
+    for field in SUMMARY_OUTPUT_ARRAY_FIELDS:
+        if field not in payload:
+            arrays[field] = []
+        elif not isinstance(payload[field], list):
+            errors.append(f"{field} must be an array")
+            arrays[field] = []
+        else:
+            arrays[field] = payload[field]
+
+    for field in ("decisions", "shared_decisions"):
+        for index, item in enumerate(arrays[field]):
+            if isinstance(item, str):
+                if not item.strip():
+                    errors.append(f"{field}[{index}] requires a non-empty summary")
+                continue
+            if not isinstance(item, dict):
+                errors.append(f"{field}[{index}] must be an object or non-empty string")
+                continue
+            summary = item.get("summary", item.get("decision"))
+            if not isinstance(summary, str) or not summary.strip():
+                errors.append(f"{field}[{index}] requires a non-empty summary")
+            for key in ("reason", "impact"):
+                if key in item and not isinstance(item[key], str):
+                    errors.append(f"{field}[{index}].{key} must be a string")
+
+    for field in ("risks", "glossary", "shared_context", "shared_sources"):
+        for index, item in enumerate(arrays[field]):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"{field}[{index}] must be a non-empty string")
+
+    for index, item in enumerate(arrays["file_map"]):
+        if not isinstance(item, dict):
+            errors.append(f"file_map[{index}] must be an object")
+            continue
+        label = item.get("label")
+        paths = item.get("paths")
+        if not isinstance(label, str) or not label.strip():
+            errors.append(f"file_map[{index}].label must be a non-empty string")
+        if not isinstance(paths, list) or not paths:
+            errors.append(f"file_map[{index}].paths must be a non-empty string array")
+        elif any(not isinstance(path, str) or not path.strip() for path in paths):
+            errors.append(f"file_map[{index}].paths must contain only non-empty strings")
+
+    for field in ("upserts", "appends"):
+        for index, item in enumerate(arrays[field]):
+            if not isinstance(item, dict):
+                errors.append(f"{field}[{index}] must be an object")
+                continue
+            kind = item.get("kind")
+            content = item.get("content")
+            if not isinstance(kind, str) or kind not in KIND_MAP:
+                errors.append(f"{field}[{index}].kind must be one of: {', '.join(sorted(KIND_MAP))}")
+            if not isinstance(content, str) or not content.strip():
+                errors.append(f"{field}[{index}].content must be a non-empty string")
+
+    for index, item in enumerate(arrays["rewrites"]):
+        if not isinstance(item, dict):
+            errors.append(f"rewrites[{index}] must be an object")
+            continue
+        for key in ("id", "content", "reason"):
+            if not isinstance(item.get(key), str) or not item[key].strip():
+                errors.append(f"rewrites[{index}].{key} must be a non-empty string")
+
+    for index, item in enumerate(arrays["deletes"]):
+        if not isinstance(item, dict):
+            errors.append(f"deletes[{index}] must be an object")
+            continue
+        for key in ("id", "reason"):
+            if not isinstance(item.get(key), str) or not item[key].strip():
+                errors.append(f"deletes[{index}].{key} must be a non-empty string")
+
+    if isinstance(payload.get("skip_reason"), str) and payload["skip_reason"].strip():
+        if any(arrays[field] for field in SUMMARY_OUTPUT_ARRAY_FIELDS):
+            errors.append("skip_reason must not be set when memory mutations are present")
+    return errors
+
 
 # Worktree write-back deliberately mirrors only append-style knowledge. Snapshot
 # fields like progress/overview/next represent the current branch state and would
@@ -1848,13 +1971,14 @@ def command_delete_entry(args):
 
 
 def command_apply_summary_output(args):
+    payload = _load_json_payload(args.json, args.json_file)
+    validation_errors = summary_output_schema_errors(payload)
+    if validation_errors:
+        raise RuntimeError("invalid summary output: " + "; ".join(validation_errors))
     repo_root, branch_name, branch_key, storage_root, repo_key, repo_dir, branch_dir, paths = ensure_branch_paths_exist(
         args.repo, args.context_dir, args.branch
     )
     worktree_writeback = _worktree_writeback_context(repo_root, repo_dir, paths, branch_name)
-    payload = _load_json_payload(args.json, args.json_file)
-    if not isinstance(payload, dict):
-        raise RuntimeError("summary output must be a JSON object")
 
     touched = []
     actions = []

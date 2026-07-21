@@ -348,6 +348,36 @@ def test_explicit_summary_skip_advances_cursor_without_apply(tmp_path, monkeypat
     assert state["processed_offset"] == 3
 
 
+def test_invalid_summary_schema_does_not_apply_or_advance_cursor(tmp_path, monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "choose_executor", lambda _config: ("fake", {"model": None, "profile": None}))
+    monkeypatch.setattr(
+        scan,
+        "run_executor_with_retries",
+        lambda *_args: (
+            {"shared_context": "字符串不能被逐字处理"},
+            [{"returncode": 0, "usage": {"total_tokens": 10}}],
+        ),
+    )
+    monkeypatch.setattr(scan, "_apply_summary", lambda *_args: (_ for _ in ()).throw(AssertionError("must not apply")))
+
+    code = scan._execute_sessions(
+        scan.default_scan_config(),
+        Namespace(dry_run=False, json=False, scheduled=False),
+        [_candidate_session(tmp_path)],
+        "run-invalid-schema",
+        0,
+    )
+
+    assert code == 1
+    run = json.loads((scan.SCAN_ROOT / "runs" / "run-invalid-schema.json").read_text(encoding="utf-8"))
+    audit = run["sessions"][0]
+    assert audit["status"] == "failed"
+    assert "shared_context must be an array" in audit["error"]
+    assert "cursor_after" not in audit
+    assert not (scan.SCAN_ROOT / "state" / "session-1.json").exists()
+
+
 def test_semantic_apply_is_done_and_advances_cursor(tmp_path, monkeypatch):
     monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
     monkeypatch.setattr(scan, "choose_executor", lambda _config: ("fake", {"model": None, "profile": None}))
@@ -470,4 +500,18 @@ def test_summary_payload_validation_rejects_schema_placeholders():
         "risks[0] contains schema placeholder text",
         "glossary[0] contains schema placeholder text",
         "shared_sources[0] contains schema placeholder text",
+    ]
+
+
+def test_summary_payload_validation_rejects_scalar_array_fields():
+    errors = scan._summary_payload_validation_errors({
+        "decisions": {"summary": "对象不能代替数组"},
+        "shared_context": "字符串不能被逐字处理",
+        "file_map": "路径映射必须是数组",
+    })
+
+    assert errors == [
+        "file_map must be an array",
+        "decisions must be an array",
+        "shared_context must be an array",
     ]
