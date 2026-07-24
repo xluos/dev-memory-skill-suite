@@ -972,7 +972,7 @@
       "width": 211,
       "height": 17.375999927520752,
       "text": {
-        "text": "03:00 / 13:00 · 活跃检测 · 增量游标",
+        "text": "10min轮询 · 30min静默 · 增量游标",
         "font_weight": "regular",
         "font_size": 12,
         "horizontal_align": "left",
@@ -3021,7 +3021,7 @@
       "width": 211,
       "height": 15.927999019622803,
       "text": {
-        "text": "唯一常驻 Skill · repo / branch / archive",
+        "text": "主动读取 Skill · repo / branch / archive",
         "font_weight": "regular",
         "font_size": 11,
         "horizontal_align": "left",
@@ -3253,7 +3253,7 @@
       "width": 208,
       "height": 21.719999313354492,
       "text": {
-        "text": "maintain tidy / archive",
+        "text": "dev-memory-maintain / CLI",
         "font_weight": "bold",
         "font_size": 15,
         "horizontal_align": "left",
@@ -3276,7 +3276,7 @@
       "width": 226,
       "height": 17.375999927520752,
       "text": {
-        "text": "按需启动独立 Agent，临时注入维护流程",
+        "text": "手动选择整理或归档，按需加载对应流程",
         "font_weight": "regular",
         "font_size": 12,
         "horizontal_align": "left",

@@ -96,11 +96,14 @@
 - 共享背景按需看 repo
 - 原始事实最后才回源
 
-## 常驻 Skill 与按需维护
+## Skill 与按需维护
 
-当前套件只提供一个常驻 Skill：`dev-memory-read`。它只负责主动定位和搜索当前 repo 的记忆文件，不承担 SessionStart 注入，也不写入。
+当前套件提供两个边界明确的 Skill：
 
-会话里的稳定语义由定期 `session-scan` 在后台对照已有记忆后统一写入。原来的 capture/setup/tidy/graduate 不再作为全局 Skill 暴露：底层 CLI 仍然保留，整理与归档说明由 `maintain` 命令临时注入独立 Agent 会话。
+- `dev-memory-read` 主动定位和搜索当前 repo 的记忆文件，只读不写。
+- `dev-memory-maintain` 是仅供用户显式调用的维护入口，根据用户选择只加载整理或归档对应的 reference。
+
+会话里的稳定语义由定期 `session-scan` 在后台对照已有记忆后统一写入。原来的 capture/setup/tidy/graduate 不再拆成多个全局 Skill：底层 CLI 仍然保留，CLI 的 `maintain` 命令也仍可临时启动独立 Agent 会话。
 
 ### `dev-memory-read`
 
@@ -114,6 +117,15 @@ dev-memory-cli read search --repo <repo-path> --query "关键词"
 它按当前 repo identity 和 branch name 精确计算 `repo_dir` / `branch_dir`，默认只搜当前 branch + repo 共享层。需要跨旧分支排查时，再显式用 `--scope all-branches` 或 `--scope archived`。
 
 它不创建新骨架，不修改文件，不扫描整个用户目录。
+
+### `dev-memory-maintain`
+
+仅当用户明确点名该 Skill 时进入。入口不承载完整维护说明，而是按用户选择只读取一个子流程：
+
+- 整理：`references/tidy.md`
+- 归档：`references/archive.md`
+
+用户没有给类型时，先询问“整理还是归档”；已经给出类型时直接执行。Skill 在当前会话中运行底层 `setup` / `tidy` / `graduate` CLI 流程，不再递归调用 `dev-memory-cli maintain`。
 
 ### 初始化
 

@@ -1,5 +1,8 @@
 import json
+import os
+import plistlib
 import sys
+import time
 from argparse import Namespace
 from pathlib import Path
 
@@ -159,56 +162,48 @@ def test_config_defaults_prefer_claude_then_codex_and_keep_coco_preset():
     assert config["executor"] == "auto"
     assert config["order"] == ["claude", "codex"]
     assert set(config["executors"]) == {"coco", "codex", "claude"}
-    assert config["schedule_times"] == ["03:00", "13:00"]
-    assert config["skip_when_computer_active"] is True
-    assert config["active_within_minutes"] == 10
+    assert config["poll_interval_minutes"] == 10
+    assert config["idle_minutes"] == 30
     assert config["invocation_timeout_seconds"] == 360
     assert scan.validate_config(config)["valid"] is True
 
 
-def test_calendar_intervals_support_multiple_configured_times():
-    config = {**scan.default_scan_config(), "schedule_times": ["13:00", "03:00", "13:00"]}
+def test_install_uses_poll_interval_instead_of_calendar_times(tmp_path, monkeypatch):
+    config = {**scan.default_scan_config(), "poll_interval_minutes": 10}
+    plist = tmp_path / "session-scan.plist"
+    monkeypatch.setattr(scan, "PLIST_PATH", plist)
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "load_config", lambda: config)
+    monkeypatch.setattr(scan, "save_scan_config", lambda _value: None)
+    monkeypatch.setattr(scan, "_cli_path", lambda: "/tmp/dev-memory-cli")
+    monkeypatch.setattr(scan.subprocess, "run", lambda *_args, **_kwargs: type("Result", (), {"returncode": 0, "stderr": ""})())
 
-    assert scan._calendar_intervals(config) == [
-        {"Hour": 3, "Minute": 0},
-        {"Hour": 13, "Minute": 0},
-    ]
+    scan.command_install(Namespace())
 
-
-def test_computer_activity_uses_configured_idle_threshold(monkeypatch):
-    config = {**scan.default_scan_config(), "active_within_minutes": 10}
-    monkeypatch.setattr(scan, "_mac_idle_seconds", lambda: 90)
-    assert scan.computer_activity(config)["status"] == "active"
-    assert scan.computer_activity(config)["skip"] is True
-
-    monkeypatch.setattr(scan, "_mac_idle_seconds", lambda: 900)
-    assert scan.computer_activity(config)["status"] == "idle"
-    assert scan.computer_activity(config)["skip"] is False
+    with plist.open("rb") as stream:
+        payload = plistlib.load(stream)
+    assert payload["StartInterval"] == 600
+    assert "StartCalendarInterval" not in payload
 
 
-def test_scheduled_scan_skips_before_discovery_when_computer_is_active(tmp_path, monkeypatch, capsys):
+def test_scheduled_poll_discovers_sessions_even_when_computer_is_active(tmp_path, monkeypatch):
     config = scan.default_scan_config()
     monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
     monkeypatch.setattr(scan, "load_config", lambda: config)
-    monkeypatch.setattr(scan, "computer_activity", lambda _config: {
-        "status": "active",
-        "idle_seconds": 5,
-        "threshold_seconds": 600,
-        "skip": True,
-    })
-    monkeypatch.setattr(scan, "discover", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("discover must not run")))
+    discovered = []
+    monkeypatch.setattr(scan, "discover", lambda *_args, **_kwargs: discovered.append(True) or [])
 
     code = scan.run_scan(Namespace(scheduled=True, dry_run=False, json=True, since=None))
 
     assert code == 0
     last_run = json.loads((scan.SCAN_ROOT / "last-run.json").read_text(encoding="utf-8"))
-    assert last_run["status"] == "skipped_active"
+    assert discovered == [True]
+    assert last_run["candidate_count"] == 0
+    assert last_run["scheduled"] is True
     assert last_run["session_count"] == 0
-    assert not (scan.SCAN_ROOT / "scan-origin.json").exists()
-    assert "skipped_active" in capsys.readouterr().out
 
 
-def test_set_schedule_reloads_installed_launch_agent(tmp_path, monkeypatch):
+def test_set_poll_interval_reloads_installed_launch_agent(tmp_path, monkeypatch):
     config = scan.default_scan_config()
     plist = tmp_path / "session-scan.plist"
     plist.write_text("installed", encoding="utf-8")
@@ -219,9 +214,9 @@ def test_set_schedule_reloads_installed_launch_agent(tmp_path, monkeypatch):
     monkeypatch.setattr(scan, "save_scan_config", lambda value: saved.update(value))
     monkeypatch.setattr(scan, "command_install", lambda _args: reloaded.append(True))
 
-    scan.command_config(Namespace(config_command="set-schedule", times=["03:00", "13:00", "18:30"]))
+    scan.command_config(Namespace(config_command="set-poll-interval", minutes=15))
 
-    assert saved["schedule_times"] == ["03:00", "13:00", "18:30"]
+    assert saved["poll_interval_minutes"] == 15
     assert reloaded == [True]
 
 
@@ -239,12 +234,108 @@ def test_discovery_deduplicates_active_and_archived_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(scan, "CODEX_HOME", codex_home)
     monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
     monkeypatch.setattr(scan, "resolve_target", lambda _cwd: ({"repo_key": "repo", "branch": "main"}, None))
+    monkeypatch.setattr(scan, "_candidate_hints", lambda: {
+        "by_session": {"session-1": {"candidate_paths": []}},
+        "by_path": {},
+    })
 
     sessions = scan.discover({**scan.default_scan_config(), "idle_minutes": 0})
 
     assert len(sessions) == 1
     assert sessions[0]["path"] == str(archived)
     assert [item["text"] for item in sessions[0]["messages"]][-1] == "archived"
+
+
+def test_discovery_requires_idle_transcript_matching_latest_stop_snapshot(tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex"
+    transcript = codex_home / "sessions" / "2026" / "07" / "01" / "rollout.jsonl"
+    transcript.parent.mkdir(parents=True)
+    _codex_transcript(transcript, [("user", "需要总结")])
+    monkeypatch.setattr(scan, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "resolve_target", lambda _cwd: ({"repo_key": "repo", "branch": "main"}, None))
+
+    def hints():
+        stat = transcript.stat()
+        candidate = {
+            "session_id": "session-1",
+            "candidate_paths": [],
+            "transcript_state": {
+                "exists": True,
+                "size": stat.st_size,
+                "mtime_ms": int(stat.st_mtime * 1000),
+            },
+        }
+        return {"by_session": {"session-1": candidate}, "by_path": {}}
+
+    monkeypatch.setattr(scan, "_candidate_hints", hints)
+    recent = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
+    assert recent["reason"] == "not_idle"
+
+    old = time.time() - 31 * 60
+    os.utime(transcript, (old, old))
+    idle = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
+    assert idle["status"] == "candidate"
+
+    frozen_hints = hints()
+    monkeypatch.setattr(scan, "_candidate_hints", lambda: frozen_hints)
+    transcript.write_text(transcript.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    changed = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
+    assert changed["reason"] == "changed_after_stop"
+
+
+def test_discovery_resumes_from_processed_offset_after_new_stop(tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex"
+    transcript = codex_home / "sessions" / "2026" / "07" / "01" / "rollout.jsonl"
+    transcript.parent.mkdir(parents=True)
+    _codex_transcript(transcript, [("user", "旧消息")])
+    processed_offset = transcript.stat().st_size
+    with transcript.open("a", encoding="utf-8") as stream:
+        stream.write(_line({
+            "timestamp": "2026-07-01T00:03:00Z",
+            "type": "response_item",
+            "payload": {"type": "message", "role": "user", "content": [{"type": "text", "text": "续聊新增消息"}]},
+        }))
+    old = time.time() - 31 * 60
+    os.utime(transcript, (old, old))
+    state_path = tmp_path / "scan" / "state" / "session-1.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({"processed_offset": processed_offset}), encoding="utf-8")
+    stat = transcript.stat()
+    candidate = {
+        "session_id": "session-1",
+        "candidate_paths": [],
+        "transcript_state": {"exists": True, "size": stat.st_size, "mtime_ms": int(stat.st_mtime * 1000)},
+    }
+    monkeypatch.setattr(scan, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "_candidate_hints", lambda: {"by_session": {"session-1": candidate}, "by_path": {}})
+    monkeypatch.setattr(scan, "resolve_target", lambda _cwd: ({"repo_key": "repo", "branch": "main"}, None))
+
+    session = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
+
+    assert session["cursor_before"] == processed_offset
+    assert [item["text"] for item in session["messages"]] == ["续聊新增消息"]
+
+
+def test_locked_poll_records_skip_without_discovery(tmp_path, monkeypatch):
+    class BusyLock:
+        def __enter__(self):
+            return False
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    monkeypatch.setattr(scan, "_session_scan_lock", lambda: BusyLock())
+    monkeypatch.setattr(scan, "discover", lambda *_args: (_ for _ in ()).throw(AssertionError("discover must not run")))
+
+    code = scan.run_scan(Namespace(scheduled=True, dry_run=False, json=True, since=None))
+
+    assert code == 0
+    run = json.loads((scan.SCAN_ROOT / "last-run.json").read_text(encoding="utf-8"))
+    assert run["status"] == "skipped_running"
+    assert run["scheduled"] is True
 
 
 def _candidate_session(tmp_path):
@@ -277,6 +368,27 @@ def _candidate_session(tmp_path):
         "status": "candidate",
         "reason": None,
     }
+
+
+def test_candidate_marker_is_removed_on_success_and_retained_on_failure(tmp_path):
+    completed = tmp_path / "completed.json"
+    failed = tmp_path / "failed.json"
+    completed.write_text("{}", encoding="utf-8")
+    failed.write_text("{}", encoding="utf-8")
+
+    scan._cleanup_candidate_hints(
+        {"candidate_paths": [str(completed)]},
+        "done",
+        None,
+    )
+    scan._cleanup_candidate_hints(
+        {"candidate_paths": [str(failed)]},
+        "failed",
+        None,
+    )
+
+    assert not completed.exists()
+    assert failed.exists()
 
 
 def test_agentic_file_uses_one_final_invocation_and_rejects_empty_output(tmp_path, monkeypatch):

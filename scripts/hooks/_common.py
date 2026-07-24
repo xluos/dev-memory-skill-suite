@@ -139,6 +139,7 @@ def register_session_scan_candidate(hook_input):
         "registered_at": now_iso(),
         "session_id": session_id,
         "transcript_path": transcript_path,
+        "transcript_state": _transcript_state(transcript_path),
         "cwd": _first_string(hook_input.get("cwd"), str(REPO_ROOT)),
     })
     return path

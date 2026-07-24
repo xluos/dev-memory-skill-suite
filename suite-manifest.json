@@ -1,7 +1,8 @@
 {
   "suite_name": "dev-memory-skill-suite",
   "skills": [
-    "dev-memory-read"
+    "dev-memory-read",
+    "dev-memory-maintain"
   ],
   "legacy_skills": [
     "dev-memory-setup",

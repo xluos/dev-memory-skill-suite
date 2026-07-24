@@ -17,13 +17,14 @@ Dev Memory Skill Suite 为 Codex、Claude Code、Trae / Trae CN 等 coding agent
 - **多仓库工作区**：一个 workspace 下可同时加载多个 repo，并为主仓库保留更完整的上下文。
 - **本地管理面板**：浏览、编辑已存储记忆，预览 SessionStart 注入文本，并查看会话扫描与 token 用量。
 
-## 一个常驻 Skill
+## 两个 Skill
 
 | Skill | 职责 | 适用场景 |
 | --- | --- | --- |
 | `dev-memory-read` | 定位并搜索当前 repo/branch 的权威记忆，只读不写 | 主动恢复既有记忆、查询历史 TODO |
+| `dev-memory-maintain` | 手动选择整理或归档，再按需读取对应子流程 | 用户显式调用 Skill 做记忆维护 |
 
-普通开发会话不再常驻 capture/setup/tidy/graduate Skill。会话写入由 session-scan 后台处理；整理和归档由 CLI 临时启动专用维护 Agent，并只把对应维护 prompt 放进那个独立会话。
+普通开发会话不再常驻 capture/setup/tidy/graduate 等多个 Skill。会话写入由 session-scan 后台处理；`dev-memory-maintain` 只在用户明确点名时启用，并根据用户选择加载整理或归档其中一套流程。CLI 仍可临时启动独立维护 Agent。
 
 ## 安装
 
@@ -41,12 +42,14 @@ npx skills add xluos/dev-memory-skill-suite --list
 
 ```bash
 npx skills add xluos/dev-memory-skill-suite --skill dev-memory-read -a codex -g -y
+npx skills add xluos/dev-memory-skill-suite --skill dev-memory-maintain -a codex -g -y
 ```
 
 安装到检测到的所有 agent：
 
 ```bash
 npx skills add xluos/dev-memory-skill-suite --skill dev-memory-read --all -g -y
+npx skills add xluos/dev-memory-skill-suite --skill dev-memory-maintain --all -g -y
 ```
 
 ### 安装 CLI 与 Hook
@@ -81,7 +84,7 @@ dev-memory-cli session-scan install
 dev-memory-cli session-scan status
 ```
 
-扫描任务默认在本地时间 03:00 和 13:00 运行，时间列表可配置。LaunchAgent 触发时会读取 macOS HID 空闲时长；最近 10 分钟有键鼠输入则记录 `skipped_active` 并退出，不扫描文件或调用模型。活跃检测失败时默认保守跳过。手工执行 `session-scan run` 不受该检测影响。`install-hooks codex` 只安装 CLI hook，不会隐式安装定时任务。
+扫描任务默认每 10 分钟轮询一次。Stop hook 会记录会话文件大小和修改时间；只有会话停止后保持 30 分钟无变化，扫描器才会读取上次成功 cursor 之后的新增语义并调用模型。电脑是否正在使用不再阻断其他已静默会话。没有合格候选时轮询直接退出，不调用模型。`install-hooks codex` 只安装 CLI hook，不会隐式安装滚动扫描任务。
 
 ## 基本使用
 
@@ -150,7 +153,9 @@ dev-memory-cli capture delete-entry --id <entry-id>
 
 ### 整理与归档
 
-普通入口只有两个，都会启动独立交互式 Agent：
+显式调用 `dev-memory-maintain` 后选择“整理”或“归档”，Skill 会只读取对应的子流程，并在当前会话中完成检查、审核和执行。它不会因为普通开发对话自动触发。
+
+也可以继续使用下面两个 CLI 入口启动独立交互式 Agent：
 
 | 命令 | 处理对象 | 结果 |
 | --- | --- | --- |
@@ -222,12 +227,12 @@ dev-memory-cli session-scan replay --run-id <run-id> --session-id <session-id> [
 dev-memory-cli session-scan config show
 dev-memory-cli session-scan config set-executor codex
 dev-memory-cli session-scan config set-model codex <model>
-dev-memory-cli session-scan config set-schedule 03:00 13:00
-dev-memory-cli session-scan config set-active-minutes 10
+dev-memory-cli session-scan config set-poll-interval 10
+dev-memory-cli session-scan config set-idle-minutes 30
 dev-memory-cli session-scan config set-timeout 360
 ```
 
-已安装定时任务时，`set-schedule` 会自动重载 LaunchAgent，使新的时间列表立即生效。
+已安装滚动扫描任务时，`set-poll-interval` 会自动重载 LaunchAgent；静默阈值由每次运行动态读取。扫描和 replay 共用单实例锁，上一轮尚未结束时新的轮询会记录 `skipped_running`，不会并发写入。
 
 `replay` 会按历史 run 记录的 `cursor_before` / `cursor_after` 精确重放指定会话，不回退当前会话游标；`--executor` 只覆盖本次运行，不修改持久配置。单分块会话只调用一次模型；最终结果必须包含至少一个记忆变更，或提供非空 `skip_reason`。空对象、只有 `title`、以及没有产生语义 action 且未说明原因的结果都会标记失败并保留重试空间。单次模型调用默认 360 秒超时，超时不会立即重试。run 账本会记录输出字段计数、`skip_reason`、payload 哈希、有效/观测字节数和语义 action 数，不保存原始总结正文。
 
@@ -289,7 +294,7 @@ Codex 原始会话和扫描审计账本位于：
 ~/.codex/archived_sessions/
 
 ~/.dev-memory/jobs/session-scan/
-  candidates/                    # Codex Stop 登记的轻量候选
+  candidates/                    # Stop 登记的会话大小/mtime 快照候选
   state/                         # 每个会话的已处理字节游标
   sessions/                      # 会话大小、分块和用量摘要
   runs/                          # 每次扫描的完整指标
@@ -363,7 +368,8 @@ lib/ui-server.js               # 本地管理面板服务
 lib/ui-app.html                # 管理面板前端
 scripts/hooks/                 # 生命周期 hook 实现
 hooks/                         # Codex / Claude Code / Trae hook 模板
-skills/dev-memory-read/        # 唯一常驻 Skill
+skills/dev-memory-read/        # 主动读取入口
+skills/dev-memory-maintain/    # 手动维护入口，按类型加载 references
 tests/                         # Python 测试
 docs/diagrams/                 # README 图表及源文件
 ```

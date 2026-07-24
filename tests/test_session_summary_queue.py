@@ -7,6 +7,7 @@ HOOKS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "hooks"
 if str(HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(HOOKS_DIR))
 
+import _common as hook_common  # noqa: E402
 from _common import build_summary_input, build_summary_prompt, enqueue_session_summary_job, session_summary_command  # noqa: E402
 
 
@@ -24,6 +25,29 @@ def _payload(tmp_path, branch="main"):
         "branch_dir": str(branch_dir),
         "last_seen_head": "abc123",
     }
+
+
+def test_stop_candidate_records_transcript_snapshot_and_refreshes(tmp_path, monkeypatch):
+    memory_home = tmp_path / "memory-home"
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text("first", encoding="utf-8")
+    monkeypatch.setattr(hook_common, "DEV_MEMORY_HOME", memory_home)
+    hook_input = {
+        "session_id": "s1",
+        "transcript_path": str(transcript),
+        "cwd": str(tmp_path),
+    }
+
+    path = hook_common.register_session_scan_candidate(hook_input)
+    first = json.loads(path.read_text(encoding="utf-8"))
+    transcript.write_text("first-second", encoding="utf-8")
+    refreshed_path = hook_common.register_session_scan_candidate(hook_input)
+    refreshed = json.loads(refreshed_path.read_text(encoding="utf-8"))
+
+    assert refreshed_path == path
+    assert first["transcript_state"]["size"] == 5
+    assert refreshed["transcript_state"]["size"] == 12
+    assert refreshed["registered_at"] >= first["registered_at"]
 
 
 def test_enqueue_session_summary_job_debounces_same_session(tmp_path, monkeypatch):

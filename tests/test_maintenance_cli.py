@@ -19,16 +19,36 @@ def run_cli(*args, cwd=None, env=None):
     )
 
 
-def test_suite_exposes_only_read_skill():
+def test_suite_exposes_read_and_manual_maintenance_skills():
     manifest = json.loads((ROOT / "suite-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["skills"] == ["dev-memory-read"]
-    assert [path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")] == ["dev-memory-read"]
+    assert manifest["skills"] == ["dev-memory-read", "dev-memory-maintain"]
+    assert sorted(path.parent.name for path in (ROOT / "skills").glob("*/SKILL.md")) == [
+        "dev-memory-maintain",
+        "dev-memory-read",
+    ]
     assert {
         "dev-memory-capture",
         "dev-memory-setup",
         "dev-memory-tidy",
         "dev-memory-graduate",
     }.issubset(set(manifest["legacy_skills"]))
+
+
+def test_maintenance_skill_is_manual_and_routes_to_one_reference():
+    skill_dir = ROOT / "skills" / "dev-memory-maintain"
+    skill = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    read_skill = (ROOT / "skills" / "dev-memory-read" / "SKILL.md").read_text(encoding="utf-8")
+    tidy = (skill_dir / "references" / "tidy.md").read_text(encoding="utf-8")
+    archive = (skill_dir / "references" / "archive.md").read_text(encoding="utf-8")
+
+    assert "仅当用户明确点名" in skill
+    assert "不要因普通的“整理记忆”或“归档分支”等自然语言自动触发" in skill
+    assert "只读取当前类型对应的 reference" in skill
+    assert "references/tidy.md" in skill
+    assert "references/archive.md" in skill
+    assert "没有用户导出的 plan 文件，禁止调用 `tidy apply`" in tidy
+    assert "获得明确确认之前禁止 apply" in archive
+    assert "用户显式调用 `dev-memory-maintain`" in read_skill
 
 
 def test_tidy_print_prompt_is_self_contained(tmp_path):

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -114,6 +116,29 @@ def _append_jsonl(path, payload):
         stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+@contextlib.contextmanager
+def _session_scan_lock():
+    SCAN_ROOT.mkdir(parents=True, exist_ok=True)
+    stream = (SCAN_ROOT / "run.lock").open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        stream.seek(0)
+        stream.truncate()
+        stream.write(f"{os.getpid()}\n")
+        stream.flush()
+        yield True
+    finally:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        stream.close()
+
+
 def _deep_merge(base, override):
     out = dict(base)
     for key, value in (override or {}).items():
@@ -129,11 +154,8 @@ def default_scan_config():
         "executor": "auto",
         "order": ["claude", "codex"],
         "executors": json.loads(json.dumps(DEFAULT_EXECUTORS)),
-        "schedule_times": ["03:00", "13:00"],
-        "skip_when_computer_active": True,
-        "active_within_minutes": 10,
-        "activity_check_fail_closed": True,
-        "idle_minutes": 60,
+        "poll_interval_minutes": 10,
+        "idle_minutes": 30,
         "first_lookback_days": 3,
         "max_attempts": 2,
         "invocation_timeout_seconds": 360,
@@ -144,7 +166,15 @@ def load_config():
     root = _read_json(CONFIG_PATH, {})
     root = root if isinstance(root, dict) else {}
     section = root.get("session_scan")
-    return _deep_merge(default_scan_config(), section if isinstance(section, dict) else {})
+    merged = _deep_merge(default_scan_config(), section if isinstance(section, dict) else {})
+    for retired in (
+        "schedule_times",
+        "skip_when_computer_active",
+        "active_within_minutes",
+        "activity_check_fail_closed",
+    ):
+        merged.pop(retired, None)
+    return merged
 
 
 def save_scan_config(section):
@@ -176,76 +206,22 @@ def validate_config(config):
             errors.append(f"executor '{name}' requires command")
         if name == "codex" and "--ephemeral" in (preset.get("extra_args") or []):
             warnings.append("codex.extra_args does not need --ephemeral; the scanner enforces it")
-    schedules = config.get("schedule_times")
-    if not isinstance(schedules, list) or not schedules:
-        errors.append("schedule_times must be a non-empty list")
-    else:
-        for value in schedules:
-            try:
-                _parse_schedule_time(value)
-            except ValueError as exc:
-                errors.append(str(exc))
     try:
-        if int(config.get("active_within_minutes", 0)) < 1:
-            errors.append("active_within_minutes must be at least 1")
+        if int(config.get("poll_interval_minutes", 0)) < 1:
+            errors.append("poll_interval_minutes must be at least 1")
     except (TypeError, ValueError):
-        errors.append("active_within_minutes must be an integer")
+        errors.append("poll_interval_minutes must be an integer")
+    try:
+        if int(config.get("idle_minutes", 0)) < 1:
+            errors.append("idle_minutes must be at least 1")
+    except (TypeError, ValueError):
+        errors.append("idle_minutes must be an integer")
     try:
         if int(config.get("invocation_timeout_seconds", 0)) < 30:
             errors.append("invocation_timeout_seconds must be at least 30")
     except (TypeError, ValueError):
         errors.append("invocation_timeout_seconds must be an integer")
     return {"valid": not errors, "errors": errors, "warnings": warnings}
-
-
-def _parse_schedule_time(value):
-    match = re.fullmatch(r"(\d{1,2}):(\d{2})", str(value or "").strip())
-    if not match:
-        raise ValueError(f"invalid schedule time '{value}', expected HH:MM")
-    hour, minute = int(match.group(1)), int(match.group(2))
-    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
-        raise ValueError(f"invalid schedule time '{value}', expected HH:MM")
-    return hour, minute
-
-
-def _calendar_intervals(config):
-    unique = sorted({_parse_schedule_time(value) for value in config.get("schedule_times", [])})
-    return [{"Hour": hour, "Minute": minute} for hour, minute in unique]
-
-
-def _mac_idle_seconds():
-    if sys.platform != "darwin":
-        return None
-    result = subprocess.run(
-        ["ioreg", "-c", "IOHIDSystem", "-d", "4"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    match = re.search(r'"HIDIdleTime"\s*=\s*(\d+)', result.stdout or "")
-    if not match:
-        return None
-    return int(match.group(1)) / 1_000_000_000
-
-
-def computer_activity(config):
-    threshold_seconds = int(config.get("active_within_minutes", 10)) * 60
-    idle_seconds = _mac_idle_seconds()
-    if idle_seconds is None:
-        return {
-            "status": "unknown",
-            "idle_seconds": None,
-            "threshold_seconds": threshold_seconds,
-            "skip": bool(config.get("activity_check_fail_closed", True)),
-        }
-    return {
-        "status": "active" if idle_seconds < threshold_seconds else "idle",
-        "idle_seconds": round(idle_seconds, 3),
-        "threshold_seconds": threshold_seconds,
-        "skip": idle_seconds < threshold_seconds,
-    }
 
 
 def choose_executor(config):
@@ -810,6 +786,67 @@ def _internal_ids():
     return ids
 
 
+def _candidate_hints():
+    by_session = {}
+    by_path = {}
+    root = SCAN_ROOT / "candidates"
+    if not root.exists():
+        return {"by_session": by_session, "by_path": by_path}
+
+    def remember(mapping, key, value):
+        if not key:
+            return
+        current = mapping.get(key)
+        if current is None or str(value.get("registered_at") or "") >= str(current.get("registered_at") or ""):
+            paths = set((current or {}).get("candidate_paths") or [])
+            paths.update(value.get("candidate_paths") or [])
+            value = {**value, "candidate_paths": sorted(paths)}
+            mapping[key] = value
+        else:
+            current["candidate_paths"] = sorted(set(current.get("candidate_paths") or []) | set(value.get("candidate_paths") or []))
+
+    for path in sorted(root.glob("*.json")):
+        value = _read_json(path)
+        if not isinstance(value, dict):
+            continue
+        value = {**value, "candidate_paths": [str(path)]}
+        remember(by_session, value.get("session_id"), value)
+        transcript_path = value.get("transcript_path")
+        if transcript_path:
+            remember(by_path, str(Path(transcript_path).expanduser()), value)
+    return {"by_session": by_session, "by_path": by_path}
+
+
+def _candidate_matches_transcript(candidate, path, stat):
+    snapshot = (candidate or {}).get("transcript_state")
+    if not isinstance(snapshot, dict) or not snapshot.get("exists"):
+        return True
+    expected_size = snapshot.get("size")
+    expected_mtime_ms = snapshot.get("mtime_ms")
+    if expected_size is not None and int(expected_size) != stat.st_size:
+        return False
+    snapshot_path = snapshot.get("path")
+    same_path = snapshot_path and Path(snapshot_path).expanduser() == path
+    if same_path and expected_mtime_ms is not None:
+        return int(expected_mtime_ms) == int(stat.st_mtime * 1000)
+    return True
+
+
+def _cleanup_candidate_hints(session, status, reason, *, dry_run=False):
+    if dry_run:
+        return
+    should_remove = status in {"done", "skipped_summary"} or reason in {
+        "unchanged",
+        "excluded_internal",
+        "excluded_automation",
+        "no_semantic_messages",
+    }
+    if not should_remove:
+        return
+    for raw_path in session.get("candidate_paths") or []:
+        Path(raw_path).unlink(missing_ok=True)
+
+
 def discover(config, since=None):
     origin = _read_json(SCAN_ROOT / "scan-origin.json", {}) or {}
     first_run = not origin
@@ -821,7 +858,8 @@ def discover(config, since=None):
         lookback = None
     internal_ids = _internal_ids()
     sessions = []
-    idle_seconds = int(config.get("idle_minutes", 60)) * 60
+    idle_seconds = int(config.get("idle_minutes", 30)) * 60
+    candidate_hints = _candidate_hints()
     source_by_session = {}
     for path in _session_files(lookback, cutoff_epoch=cutoff_epoch):
         meta = _codex_session_meta(path)
@@ -835,6 +873,7 @@ def discover(config, since=None):
         source_by_session.items(), key=lambda item: (item[1][0].stat().st_mtime, str(item[1][0]))
     ):
         stat = path.stat()
+        candidate = candidate_hints["by_session"].get(session_id) or candidate_hints["by_path"].get(str(path))
         state = _read_json(_state_path(session_id), {}) or {}
         cursor = int(state.get("processed_offset", 0))
         if cursor and stat.st_size <= cursor:
@@ -855,6 +894,10 @@ def discover(config, since=None):
             reason = "excluded_internal"
         elif meta.get("thread_source") == "automation":
             reason = "excluded_automation"
+        elif not candidate:
+            reason = "not_stopped"
+        elif not _candidate_matches_transcript(candidate, path, stat):
+            reason = "changed_after_stop"
         elif time.time() - path.stat().st_mtime < idle_seconds:
             reason = "not_idle"
         elif parsed["size"] <= cursor:
@@ -870,6 +913,7 @@ def discover(config, since=None):
             "target": target,
             "status": "candidate" if not reason else "skipped",
             "reason": reason,
+            "candidate_paths": (candidate or {}).get("candidate_paths") or [],
         })
     return sessions
 
@@ -881,19 +925,18 @@ def _persist_scan_run(run, event):
     _append_jsonl(SCAN_ROOT / "events.jsonl", {"at": now_iso(), "event": event, "run_id": run_id})
 
 
-def _skipped_activity_run(run_id, started, activity, *, dry_run=False):
-    status = "skipped_active" if activity["status"] == "active" else "skipped_activity_unknown"
+def _skipped_running_run(run_id, started, *, dry_run=False, scheduled=False):
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
-        "status": status,
-        "skip_reason": activity["status"],
+        "status": "skipped_running",
+        "skip_reason": "another session-scan process holds the run lock",
         "started_at": dt.datetime.fromtimestamp(started, dt.timezone.utc).isoformat(),
         "finished_at": now_iso(),
         "duration_ms": int((time.time() - started) * 1000),
-        "scheduled": True,
+        "scheduled": bool(scheduled),
         "dry_run": bool(dry_run),
-        "activity": activity,
+        "activity": None,
         "executor": None,
         "model": None,
         "profile": None,
@@ -981,6 +1024,12 @@ def _execute_sessions(config, args, sessions, run_id, started, *, activity=None,
                 audit["reason"] = "no_semantic_messages"
             results.append(audit)
             _atomic_json(_session_audit_path(session["session_id"]), audit)
+            _cleanup_candidate_hints(
+                session,
+                audit["status"],
+                audit.get("reason"),
+                dry_run=bool(args.dry_run),
+            )
             continue
         semantic_chars = sum(len(item["text"]) for item in session["messages"])
         audit["input_mode"] = "agentic_file"
@@ -1050,6 +1099,12 @@ def _execute_sessions(config, args, sessions, run_id, started, *, activity=None,
         audit["model"] = preset.get("model")
         results.append(audit)
         _atomic_json(_session_audit_path(session["session_id"]), audit)
+        _cleanup_candidate_hints(
+            session,
+            audit["status"],
+            audit.get("reason"),
+            dry_run=bool(args.dry_run),
+        )
     usage, unavailable = _sum_usage(invocations)
     run = {
         "schema_version": SCHEMA_VERSION,
@@ -1091,30 +1146,33 @@ def _execute_sessions(config, args, sessions, run_id, started, *, activity=None,
 
 
 def run_scan(args):
-    config = load_config()
-    validation = validate_config(config)
-    if not validation["valid"]:
-        raise RuntimeError("; ".join(validation["errors"]))
     run_id = dt.datetime.now().strftime("%Y%m%dT%H%M%S") + f"-{os.getpid()}"
     started = time.time()
-    activity = None
-    if getattr(args, "scheduled", False) and config.get("skip_when_computer_active", True):
-        activity = computer_activity(config)
-        if activity["skip"]:
-            run = _skipped_activity_run(run_id, started, activity, dry_run=args.dry_run)
+    with _session_scan_lock() as acquired:
+        if not acquired:
+            run = _skipped_running_run(
+                run_id,
+                started,
+                dry_run=args.dry_run,
+                scheduled=bool(getattr(args, "scheduled", False)),
+            )
             _persist_scan_run(run, run["status"])
             print(json.dumps(run, ensure_ascii=False, indent=2) if args.json else _format_run(run))
             return 0
-    origin_path = SCAN_ROOT / "scan-origin.json"
-    if not origin_path.exists():
-        lookback_days = int(config.get("first_lookback_days", 3))
-        _atomic_json(origin_path, {
-            "created_at": now_iso(),
-            "initial_cutoff_epoch": time.time() - lookback_days * 86400,
-            "first_lookback_days": lookback_days,
-        })
-    sessions = discover(config, args.since)
-    return _execute_sessions(config, args, sessions, run_id, started, activity=activity)
+        config = load_config()
+        validation = validate_config(config)
+        if not validation["valid"]:
+            raise RuntimeError("; ".join(validation["errors"]))
+        origin_path = SCAN_ROOT / "scan-origin.json"
+        if not origin_path.exists():
+            lookback_days = int(config.get("first_lookback_days", 3))
+            _atomic_json(origin_path, {
+                "created_at": now_iso(),
+                "initial_cutoff_epoch": time.time() - lookback_days * 86400,
+                "first_lookback_days": lookback_days,
+            })
+        sessions = discover(config, args.since)
+        return _execute_sessions(config, args, sessions, run_id, started, activity=None)
 
 
 def _format_tokens(usage):
@@ -1124,6 +1182,8 @@ def _format_tokens(usage):
 def _format_run(run):
     if str(run.get("status", "")).startswith("skipped_"):
         activity = run.get("activity") or {}
+        if not activity:
+            return f"run {run['run_id']}: {run['status']}; reason={run.get('skip_reason')}"
         return (
             f"run {run['run_id']}: {run['status']}; "
             f"idle_seconds={activity.get('idle_seconds')} threshold={activity.get('threshold_seconds')}"
@@ -1286,7 +1346,7 @@ def _replay_session(source_run_id, audit):
     }
 
 
-def command_replay(args):
+def _command_replay_locked(args):
     config = load_config()
     validation = validate_config(config)
     if not validation["valid"]:
@@ -1313,6 +1373,13 @@ def command_replay(args):
     )
 
 
+def command_replay(args):
+    with _session_scan_lock() as acquired:
+        if not acquired:
+            raise RuntimeError("another session-scan process is already running")
+        return _command_replay_locked(args)
+
+
 def _cli_path():
     explicit = os.environ.get("DEV_MEMORY_CLI_PATH", "").strip()
     if explicit:
@@ -1329,7 +1396,7 @@ def command_install(_args):
     plist = {
         "Label": "com.dev-memory.session-scan",
         "ProgramArguments": [_cli_path(), "session-scan", "run", "--scheduled"],
-        "StartCalendarInterval": _calendar_intervals(config),
+        "StartInterval": int(config["poll_interval_minutes"]) * 60,
         "RunAtLoad": False,
         "StandardOutPath": str(logs / "launchd.stdout.log"),
         "StandardErrorPath": str(logs / "launchd.stderr.log"),
@@ -1345,9 +1412,8 @@ def command_install(_args):
     print(json.dumps({
         "installed": True,
         "plist": str(PLIST_PATH),
-        "schedule_times": config["schedule_times"],
-        "skip_when_computer_active": config["skip_when_computer_active"],
-        "active_within_minutes": config["active_within_minutes"],
+        "poll_interval_minutes": config["poll_interval_minutes"],
+        "idle_minutes": config["idle_minutes"],
         "logs": str(logs),
     }, ensure_ascii=False, indent=2))
 
@@ -1372,9 +1438,8 @@ def command_status(_args):
         "codex_sessions": str(CODEX_HOME / "sessions"),
         "executor": executor,
         "model": preset.get("model") if preset else None,
-        "schedule_times": config.get("schedule_times"),
-        "skip_when_computer_active": config.get("skip_when_computer_active"),
-        "active_within_minutes": config.get("active_within_minutes"),
+        "poll_interval_minutes": config.get("poll_interval_minutes"),
+        "idle_minutes": config.get("idle_minutes"),
         "config": validation,
         "last_run": _read_json(SCAN_ROOT / "last-run.json"),
     }, ensure_ascii=False, indent=2))
@@ -1400,22 +1465,20 @@ def command_config(args):
             raise RuntimeError(f"unknown executor preset: {args.executor}")
         field = "model" if args.config_command == "set-model" else "profile"
         config["executors"][args.executor][field] = args.value
-    elif args.config_command == "set-schedule":
-        for value in args.times:
-            _parse_schedule_time(value)
-        config["schedule_times"] = args.times
-    elif args.config_command == "set-active-minutes":
+    elif args.config_command == "set-poll-interval":
         if args.minutes < 1:
-            raise RuntimeError("active minutes must be at least 1")
-        config["active_within_minutes"] = args.minutes
+            raise RuntimeError("poll interval minutes must be at least 1")
+        config["poll_interval_minutes"] = args.minutes
+    elif args.config_command == "set-idle-minutes":
+        if args.minutes < 1:
+            raise RuntimeError("idle minutes must be at least 1")
+        config["idle_minutes"] = args.minutes
     elif args.config_command == "set-timeout":
         if args.seconds < 30:
             raise RuntimeError("timeout seconds must be at least 30")
         config["invocation_timeout_seconds"] = args.seconds
-    elif args.config_command == "set-active-check":
-        config["skip_when_computer_active"] = args.enabled == "on"
     save_scan_config(config)
-    if args.config_command == "set-schedule" and PLIST_PATH.exists():
+    if args.config_command == "set-poll-interval" and PLIST_PATH.exists():
         command_install(args)
         return
     print(json.dumps(config, ensure_ascii=False, indent=2))
@@ -1428,7 +1491,7 @@ def build_parser():
     run.add_argument("--since")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--json", action="store_true")
-    run.add_argument("--scheduled", action="store_true", help="Apply computer activity guard before scanning")
+    run.add_argument("--scheduled", action="store_true", help="Mark a LaunchAgent polling run")
     run.add_argument("--executor", help="Override the configured executor for this run only")
     sub.add_parser("install")
     sub.add_parser("status")
@@ -1459,14 +1522,12 @@ def build_parser():
         item = config_sub.add_parser(command)
         item.add_argument("executor")
         item.add_argument("value")
-    set_schedule = config_sub.add_parser("set-schedule")
-    set_schedule.add_argument("times", nargs="+")
-    set_active_minutes = config_sub.add_parser("set-active-minutes")
-    set_active_minutes.add_argument("minutes", type=int)
+    set_poll_interval = config_sub.add_parser("set-poll-interval")
+    set_poll_interval.add_argument("minutes", type=int)
+    set_idle_minutes = config_sub.add_parser("set-idle-minutes")
+    set_idle_minutes.add_argument("minutes", type=int)
     set_timeout = config_sub.add_parser("set-timeout")
     set_timeout.add_argument("seconds", type=int)
-    set_active_check = config_sub.add_parser("set-active-check")
-    set_active_check.add_argument("enabled", choices=("on", "off"))
     return parser
 
 
