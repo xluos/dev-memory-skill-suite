@@ -84,7 +84,7 @@ dev-memory-cli session-scan install
 dev-memory-cli session-scan status
 ```
 
-扫描任务默认每 10 分钟轮询一次。Stop hook 会记录会话文件大小和修改时间；只有会话停止后保持 30 分钟无变化，扫描器才会读取上次成功 cursor 之后的新增语义并调用模型。电脑是否正在使用不再阻断其他已静默会话。没有合格候选时轮询直接退出，不调用模型。`install-hooks codex` 只安装 CLI hook，不会隐式安装滚动扫描任务。
+扫描任务默认每 10 分钟轮询一次。Stop hook 会记录会话文件大小和修改时间；只有会话停止后保持 30 分钟无变化，扫描器才会读取上次成功 cursor 之后的新增语义并调用模型。Stop 后 transcript 若仍有尾部写入，会按当前文件最后修改时间重新等待静默，不会永久跳过该候选。电脑是否正在使用不再阻断其他已静默会话。候选和静默门槛在读取会话正文之前判断，没有合格候选时轮询直接退出，不调用模型。`install-hooks codex` 只安装 CLI hook，不会隐式安装滚动扫描任务。
 
 ## 基本使用
 
@@ -314,7 +314,7 @@ dev-memory-cli ui --no-open
 dev-memory-cli ui --read-only
 ```
 
-管理面板默认只监听 `127.0.0.1`，提供 repo/branch 文件浏览、已有 Markdown 或 JSON 编辑、目标分支完整注入预览，以及按仓库和扫描运行聚合的原始大小、处理字节数与 token 用量。未返回 usage 的执行器调用单独标记，不按 0 token 处理。命令行预览入口如下：
+管理面板默认只监听 `127.0.0.1`，提供 repo/branch 文件浏览、已有 Markdown 或 JSON 编辑、目标分支完整注入预览。其“扫描任务”页签直接读取 `runs/*.json` 账本：脉冲带展示最近触发轮次，每一轮都可展开查看候选任务、写入结果、失败原因、游标是否推进和发现阶段的跳过分布。未返回 usage 的执行器调用单独标记，不按 0 token 处理。命令行预览入口如下：
 
 ```bash
 dev-memory-cli context injection-preview \

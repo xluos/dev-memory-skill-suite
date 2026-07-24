@@ -141,7 +141,7 @@ dev-memory-cli session-scan install
 dev-memory-cli session-scan status
 ```
 
-任务默认每 10 分钟运行一次。Stop hook 会在 `candidates/` 保存当时的 transcript 大小和 mtime；只有候选保持 30 分钟未变化才会进入总结。全局键鼠活跃不再阻断扫描，因此用户正在操作一个会话时，其他已经静默的会话仍可沉淀。没有合格候选时不会选择执行器或调用模型。
+任务默认每 10 分钟运行一次。Stop hook 会在 `candidates/` 保存当时的 transcript 大小和 mtime；扫描器以当前 transcript 的 mtime 判断是否已静默 30 分钟。Stop 后若还有尾部写入，会从当前 mtime 重新等待，而不是永久标记为 `changed_after_stop`。全局键鼠活跃不再阻断扫描，因此用户正在操作一个会话时，其他已经静默的会话仍可沉淀。候选和静默检查发生在正文解析之前，没有合格候选时不会读取会话正文、选择执行器或调用模型。
 
 首次扫描只回看最近 3 天；后续使用持久化字节游标补扫上次成功处理后产生的全部数据。同一会话总结后再次续聊，下一次 Stop 会刷新候选快照，扫描器只读取上次 `processed_offset` 之后的新增消息。失败不推进游标且保留候选，后续轮询自动重试。`install-hooks codex` 与 `session-scan install` 相互独立。
 
@@ -212,7 +212,7 @@ dev-memory-cli session-scan show <run-id>
 dev-memory-cli session-scan uninstall
 ```
 
-`dev-memory-cli ui` 的“会话扫描”视图读取同一账本，展示仓库扫描次数、会话数量、原始大小、新增数据量和每次总结 token。
+`dev-memory-cli ui` 的“扫描任务”页签读取同一账本。脉冲带展示最近触发轮次；逐轮账本可展开查看本轮候选任务、写入或失败结果、游标推进情况，以及发现阶段的跳过原因分布。
 
 ## 接入边界
 

@@ -832,6 +832,19 @@ def _candidate_matches_transcript(candidate, path, stat):
     return True
 
 
+def _unparsed_session(path, stat, meta, state, cursor):
+    return {
+        "path": str(path),
+        "size": stat.st_size,
+        "mtime": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc).isoformat(),
+        "end_offset": cursor,
+        "meta": meta,
+        "messages": [],
+        "session_usage": state.get("session_usage"),
+        "internal_marker": bool(state.get("internal_marker")),
+    }
+
+
 def _cleanup_candidate_hints(session, status, reason, *, dry_run=False):
     if dry_run:
         return
@@ -876,35 +889,33 @@ def discover(config, since=None):
         candidate = candidate_hints["by_session"].get(session_id) or candidate_hints["by_path"].get(str(path))
         state = _read_json(_state_path(session_id), {}) or {}
         cursor = int(state.get("processed_offset", 0))
-        if cursor and stat.st_size <= cursor:
-            parsed = {
-                "path": str(path),
-                "size": stat.st_size,
-                "mtime": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc).isoformat(),
-                "end_offset": cursor,
-                "meta": meta,
-                "messages": [],
-                "session_usage": state.get("session_usage"),
-                "internal_marker": bool(state.get("internal_marker")),
-            }
-        else:
-            parsed = parse_codex_session(path, cursor)
+        parsed = _unparsed_session(path, stat, meta, state, cursor)
+        snapshot_changed = bool(candidate) and not _candidate_matches_transcript(candidate, path, stat)
         reason = None
+        target = None
         if session_id in internal_ids or str(session_id).startswith("dev-memory-summary-") or parsed["internal_marker"]:
             reason = "excluded_internal"
         elif meta.get("thread_source") == "automation":
             reason = "excluded_automation"
         elif not candidate:
             reason = "not_stopped"
-        elif not _candidate_matches_transcript(candidate, path, stat):
-            reason = "changed_after_stop"
-        elif time.time() - path.stat().st_mtime < idle_seconds:
-            reason = "not_idle"
-        elif parsed["size"] <= cursor:
+        elif stat.st_size <= cursor:
             reason = "unchanged"
-        target, target_error = resolve_target(meta.get("cwd"))
-        if not reason and target_error:
-            reason = target_error
+        elif time.time() - stat.st_mtime < idle_seconds:
+            reason = "not_idle"
+        if not reason:
+            target, target_error = resolve_target(meta.get("cwd"))
+            if target_error:
+                reason = target_error
+        if not reason:
+            parsed = parse_codex_session(path, cursor)
+            final_stat = path.stat()
+            if (final_stat.st_size, final_stat.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+                parsed = _unparsed_session(path, final_stat, meta, state, cursor)
+                snapshot_changed = True
+                reason = "not_idle"
+            elif parsed["internal_marker"]:
+                reason = "excluded_internal"
         sessions.append({
             **parsed,
             "session_id": session_id,
@@ -913,6 +924,7 @@ def discover(config, since=None):
             "target": target,
             "status": "candidate" if not reason else "skipped",
             "reason": reason,
+            "stop_snapshot_changed": snapshot_changed,
             "candidate_paths": (candidate or {}).get("candidate_paths") or [],
         })
     return sessions

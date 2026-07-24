@@ -246,7 +246,7 @@ def test_discovery_deduplicates_active_and_archived_copy(tmp_path, monkeypatch):
     assert [item["text"] for item in sessions[0]["messages"]][-1] == "archived"
 
 
-def test_discovery_requires_idle_transcript_matching_latest_stop_snapshot(tmp_path, monkeypatch):
+def test_discovery_restarts_idle_wait_when_transcript_changes_after_stop(tmp_path, monkeypatch):
     codex_home = tmp_path / "codex"
     transcript = codex_home / "sessions" / "2026" / "07" / "01" / "rollout.jsonl"
     transcript.parent.mkdir(parents=True)
@@ -281,7 +281,41 @@ def test_discovery_requires_idle_transcript_matching_latest_stop_snapshot(tmp_pa
     monkeypatch.setattr(scan, "_candidate_hints", lambda: frozen_hints)
     transcript.write_text(transcript.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     changed = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
-    assert changed["reason"] == "changed_after_stop"
+    assert changed["reason"] == "not_idle"
+    assert changed["stop_snapshot_changed"] is True
+
+    os.utime(transcript, (old, old))
+    settled = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
+    assert settled["status"] == "candidate"
+    assert settled["stop_snapshot_changed"] is True
+
+
+def test_discovery_does_not_parse_sessions_before_candidate_and_idle_gates(tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex"
+    transcript = codex_home / "sessions" / "2026" / "07" / "01" / "rollout.jsonl"
+    transcript.parent.mkdir(parents=True)
+    _codex_transcript(transcript, [("user", "暂时不应读取正文")])
+    monkeypatch.setattr(scan, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(scan, "SCAN_ROOT", tmp_path / "scan")
+    parsed = []
+    original_parser = scan.parse_codex_session
+    monkeypatch.setattr(
+        scan,
+        "parse_codex_session",
+        lambda *args, **kwargs: parsed.append(True) or original_parser(*args, **kwargs),
+    )
+
+    no_stop = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
+    assert no_stop["reason"] == "not_stopped"
+    assert parsed == []
+
+    monkeypatch.setattr(scan, "_candidate_hints", lambda: {
+        "by_session": {"session-1": {"candidate_paths": []}},
+        "by_path": {},
+    })
+    recent_stop = scan.discover({**scan.default_scan_config(), "idle_minutes": 30})[0]
+    assert recent_stop["reason"] == "not_idle"
+    assert parsed == []
 
 
 def test_discovery_resumes_from_processed_offset_after_new_stop(tmp_path, monkeypatch):
