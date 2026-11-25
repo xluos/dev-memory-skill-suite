@@ -11,11 +11,13 @@ import plistlib
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from dev_memory_common import get_branch_paths, list_repos_in_workspace, now_iso
 from dev_memory_capture import KIND_MAP, summary_output_schema_errors
@@ -27,6 +29,12 @@ CONFIG_PATH = Path(os.environ.get("DEV_MEMORY_CONFIG_PATH", "~/.dev-memory/confi
 DEV_MEMORY_HOME = Path(os.environ.get("DEV_MEMORY_HOME", "~/.dev-memory")).expanduser()
 SCAN_ROOT = Path(os.environ.get("DEV_MEMORY_SCAN_ROOT", DEV_MEMORY_HOME / "jobs" / "session-scan")).expanduser()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
+DEFAULT_ANTIGRAVITY_HOMES = (
+    Path("~/.gemini/antigravity").expanduser(),
+    Path("~/.gemini/antigravity-cli").expanduser(),
+    Path("~/.gemini/antigravity-ide").expanduser(),
+)
+USER_REQUEST_RE = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.DOTALL)
 PLIST_PATH = Path(os.environ.get(
     "DEV_MEMORY_SCAN_PLIST",
     "~/Library/LaunchAgents/com.dev-memory.session-scan.plist",
@@ -84,6 +92,14 @@ DEFAULT_EXECUTORS = {
         "extra_args": [],
         "env": {},
     },
+    "traecli": {
+        "enabled": True,
+        "command": "traecli",
+        "model": None,
+        "profile": None,
+        "extra_args": [],
+        "env": {},
+    },
     "claude": {
         "enabled": True,
         "command": "claude",
@@ -116,6 +132,36 @@ def _append_jsonl(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _stream_meta(value):
+    if value is None:
+        return {"chars": 0, "lines": 0, "sha256": None}
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = str(value)
+    return {
+        "chars": len(text),
+        "lines": len(text.splitlines()),
+        "sha256": hashlib.sha256(text.encode()).hexdigest() if text else None,
+    }
+
+
+def _executor_event(preset, event, run_id, invocation, **details):
+    path = preset.get("_event_log_path")
+    if not path:
+        return
+    try:
+        _append_jsonl(Path(path), {
+            "schema_version": SCHEMA_VERSION,
+            "at": now_iso(),
+            "event": event,
+            "run_id": run_id,
+            "invocation": invocation,
+            **details,
+        })
+    except OSError:
+        pass
 
 
 @contextlib.contextmanager
@@ -161,6 +207,12 @@ def default_scan_config():
         "first_lookback_days": 3,
         "max_attempts": 2,
         "invocation_timeout_seconds": 600,
+        "max_session_failures": 5,
+        "failure_backoff_minutes": [30, 120, 360, 1440],
+        "circuit_breaker_threshold": 3,
+        "daily_housekeeping_enabled": True,
+        "daily_tidy_max_targets": 5,
+        "empty_repo_grace_hours": 24,
     }
 
 
@@ -206,8 +258,8 @@ def validate_config(config):
         command = preset.get("command")
         if not isinstance(command, str) or not command.strip():
             errors.append(f"executor '{name}' requires command")
-        if name == "codex" and "--ephemeral" in (preset.get("extra_args") or []):
-            warnings.append("codex.extra_args does not need --ephemeral; the scanner enforces it")
+        if name in {"codex", "traecli", "traex"} and "--ephemeral" in (preset.get("extra_args") or []):
+            warnings.append(f"{name}.extra_args does not need --ephemeral; the scanner enforces it")
     try:
         if int(config.get("poll_interval_minutes", 0)) < 1:
             errors.append("poll_interval_minutes must be at least 1")
@@ -367,6 +419,222 @@ def _codex_session_meta(path):
     return {}
 
 
+def _antigravity_homes():
+    explicit_list = os.environ.get("DEV_MEMORY_ANTIGRAVITY_HOMES", "").strip()
+    if explicit_list:
+        return [Path(item).expanduser() for item in explicit_list.split(os.pathsep) if item.strip()]
+    explicit_single = os.environ.get("ANTIGRAVITY_HOME", "").strip()
+    if explicit_single:
+        return [Path(explicit_single).expanduser()]
+    return list(DEFAULT_ANTIGRAVITY_HOMES)
+
+
+def _decode_file_uri(uri):
+    if not isinstance(uri, str) or not uri.strip():
+        return None
+    raw = uri.strip()
+    if raw.startswith("file://"):
+        parsed = urlparse(raw)
+        path = unquote(parsed.path)
+        return path or None
+    return raw
+
+
+def _load_antigravity_db_meta(ag_home):
+    db_path = Path(ag_home) / "conversation_summaries.db"
+    if not db_path.is_file():
+        return {}
+    meta_by_id = {}
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0)
+        cur = conn.cursor()
+        rows = cur.execute(
+            "SELECT conversation_id, title, workspace_uris, status, source, "
+            "parent_conversation_id, nesting_depth, not_fully_idle, killed "
+            "FROM conversation_summaries"
+        ).fetchall()
+        for row in rows:
+            conv_id, title, workspace_uris_raw, status, source, parent_id, nesting_depth, not_fully_idle, killed = row
+            if not conv_id:
+                continue
+            workspace_paths = []
+            try:
+                uris = json.loads(workspace_uris_raw) if workspace_uris_raw else []
+                if isinstance(uris, list):
+                    for uri in uris:
+                        decoded = _decode_file_uri(uri)
+                        if decoded:
+                            workspace_paths.append(decoded)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            meta_by_id[str(conv_id)] = {
+                "title": title or "",
+                "cwd": workspace_paths[0] if workspace_paths else None,
+                "workspace_paths": workspace_paths,
+                "ag_status": status or "",
+                "ag_source": source or "",
+                "parent_conversation_id": parent_id or "",
+                "nesting_depth": int(nesting_depth or 0),
+                "not_fully_idle": bool(not_fully_idle),
+                "killed": bool(killed),
+            }
+    except Exception:
+        return {}
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return meta_by_id
+
+
+def _antigravity_semantic_message(obj):
+    msg_type = obj.get("type")
+    if msg_type == "USER_INPUT":
+        source = obj.get("source")
+        if source and source != "USER_EXPLICIT":
+            return None
+        content = obj.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return None
+        match = USER_REQUEST_RE.search(content)
+        text = match.group(1).strip() if match else content.strip()
+        if not text:
+            return None
+        return {"role": "user", "text": text, "timestamp": obj.get("created_at")}
+    if msg_type == "PLANNER_RESPONSE":
+        if obj.get("tool_calls"):
+            return None
+        content = obj.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return None
+        return {"role": "assistant", "text": content.strip(), "timestamp": obj.get("created_at")}
+    return None
+
+
+def parse_antigravity_session(path, since_offset=0, meta=None):
+    path = Path(path)
+    meta = dict(meta or {})
+    messages = []
+    usage_totals = {
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "output_tokens": 0,
+    }
+    saw_usage = False
+    internal_marker = False
+    end_offset = since_offset
+    with path.open("rb") as stream:
+        if since_offset:
+            stream.seek(since_offset)
+        while True:
+            start = stream.tell()
+            raw = stream.readline()
+            if not raw:
+                break
+            end = stream.tell()
+            end_offset = end
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if obj.get("type") == "PLANNER_RESPONSE":
+                inp = obj.get("input_tokens")
+                cached = obj.get("cache_read_tokens")
+                out = obj.get("output_tokens")
+                if any(isinstance(v, (int, float)) for v in (inp, cached, out)):
+                    saw_usage = True
+                    usage_totals["input_tokens"] += int(inp or 0)
+                    usage_totals["cached_input_tokens"] += int(cached or 0)
+                    usage_totals["output_tokens"] += int(out or 0)
+            message = _antigravity_semantic_message(obj)
+            if message and any(marker in message["text"] for marker in INTERNAL_MARKERS):
+                internal_marker = True
+            if message and end > since_offset:
+                message.update({"start_offset": start, "end_offset": end})
+                messages.append(message)
+    stat = path.stat()
+    total_usage = None
+    if saw_usage:
+        total_usage = {
+            **usage_totals,
+            "total_tokens": usage_totals["input_tokens"] + usage_totals["output_tokens"],
+        }
+    return {
+        "path": str(path),
+        "size": stat.st_size,
+        "mtime": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc).isoformat(),
+        "end_offset": end_offset,
+        "meta": meta,
+        "messages": messages,
+        "session_usage": total_usage,
+        "internal_marker": internal_marker,
+    }
+
+
+def _detect_session_source_kind(path):
+    p = Path(path)
+    if p.name in {"transcript.jsonl", "transcript_full.jsonl"} and p.parent.name == "logs":
+        return "antigravity"
+    return "codex"
+
+
+def parse_session(path, since_offset=0, source_kind=None, meta=None):
+    kind = source_kind or _detect_session_source_kind(path)
+    if kind == "antigravity":
+        return parse_antigravity_session(path, since_offset=since_offset, meta=meta)
+    return parse_codex_session(path, since_offset=since_offset)
+
+
+def _antigravity_session_entries(lookback_days=None, cutoff_epoch=None):
+    cutoff = cutoff_epoch
+    if cutoff is None and lookback_days is not None:
+        cutoff = time.time() - (lookback_days * 86400)
+    found = []
+    for ag_home in _antigravity_homes():
+        brain_root = ag_home / "brain"
+        if not brain_root.is_dir():
+            continue
+        db_meta = _load_antigravity_db_meta(ag_home)
+        try:
+            conv_dirs = sorted(brain_root.iterdir(), key=lambda p: p.name)
+        except OSError:
+            continue
+        for conv_dir in conv_dirs:
+            if not conv_dir.is_dir():
+                continue
+            logs_dir = conv_dir / ".system_generated" / "logs"
+            full_path = logs_dir / "transcript_full.jsonl"
+            compact_path = logs_dir / "transcript.jsonl"
+            transcript_path = full_path if full_path.is_file() else (compact_path if compact_path.is_file() else None)
+            if transcript_path is None:
+                continue
+            try:
+                if cutoff is not None and transcript_path.stat().st_mtime < cutoff:
+                    continue
+            except OSError:
+                continue
+            conv_id = conv_dir.name
+            row = db_meta.get(conv_id) or {}
+            meta = {
+                "session_id": conv_id,
+                "id": conv_id,
+                "originator": "antigravity",
+                "source": ag_home.name,
+                "cwd": row.get("cwd"),
+                "workspace_paths": row.get("workspace_paths") or [],
+                "title": row.get("title") or "",
+                "ag_status": row.get("ag_status") or "",
+                "not_fully_idle": bool(row.get("not_fully_idle")),
+                "parent_conversation_id": row.get("parent_conversation_id") or "",
+                "nesting_depth": int(row.get("nesting_depth") or 0),
+            }
+            found.append((conv_id, transcript_path, meta))
+    return found
+
+
 def _session_files(lookback_days=None, cutoff_epoch=None):
     roots = [CODEX_HOME / "sessions", CODEX_HOME / "archived_sessions"]
     cutoff = cutoff_epoch
@@ -389,6 +657,11 @@ def _session_files(lookback_days=None, cutoff_epoch=None):
 def _state_path(session_id):
     safe = re.sub(r"[^0-9A-Za-z_.-]", "_", session_id)
     return SCAN_ROOT / "state" / f"{safe}.json"
+
+
+def _failure_state_path(session_id):
+    safe = re.sub(r"[^0-9A-Za-z_.-]", "_", session_id)
+    return SCAN_ROOT / "failures" / f"{safe}.json"
 
 
 def _session_audit_path(session_id):
@@ -645,7 +918,7 @@ def _executor_args(name, preset, prompt):
         if profile:
             args += ["-c", f"profile={profile}"]
         args += extra + [prompt]
-    elif name == "codex":
+    elif name in {"codex", "traecli", "traex"}:
         args = command + [
             "exec", "--ephemeral", "--json", "--ignore-rules",
             "--skip-git-repo-check", "--sandbox", "danger-full-access",
@@ -764,6 +1037,15 @@ def run_executor(name, preset, prompt, cwd, run_id, invocation):
         "returncode": None,
         "usage_status": "unavailable",
     }
+    prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
+    record["prompt_sha256"] = prompt_sha256
+    _executor_event(
+        preset, "executor_started", run_id, invocation,
+        executor=name,
+        timeout_seconds=timeout_seconds,
+        prompt_chars=len(prompt),
+        prompt_sha256=prompt_sha256,
+    )
     try:
         result = subprocess.run(
             args,
@@ -774,19 +1056,41 @@ def run_executor(name, preset, prompt, cwd, run_id, invocation):
             check=False,
             timeout=timeout_seconds,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        stdout_meta = _stream_meta(getattr(exc, "stdout", None) or getattr(exc, "output", None))
+        stderr_meta = _stream_meta(getattr(exc, "stderr", None))
         record.update({
             "duration_ms": int((time.time() - started) * 1000),
             "returncode": None,
             "timed_out": True,
             "timeout_seconds": timeout_seconds,
+            "stdout": stdout_meta,
+            "stderr": stderr_meta,
             "error": f"executor timed out after {timeout_seconds} seconds",
         })
+        _executor_event(
+            preset, "executor_timed_out", run_id, invocation,
+            executor=name,
+            duration_ms=record["duration_ms"],
+            timeout_seconds=timeout_seconds,
+            stdout=stdout_meta,
+            stderr=stderr_meta,
+        )
         return None, record
     record["duration_ms"] = int((time.time() - started) * 1000)
     record["returncode"] = result.returncode
+    record["stdout"] = _stream_meta(result.stdout)
+    record["stderr"] = _stream_meta(result.stderr)
     if result.returncode != 0:
         record["error"] = (result.stderr or result.stdout or "executor failed")[-4000:]
+        _executor_event(
+            preset, "executor_failed", run_id, invocation,
+            executor=name,
+            duration_ms=record["duration_ms"],
+            returncode=result.returncode,
+            stdout=record["stdout"],
+            stderr=record["stderr"],
+        )
         return None, record
     try:
         payload, usage, session_id = _parse_executor_output(name, result.stdout, result.stderr)
@@ -798,9 +1102,27 @@ def run_executor(name, preset, prompt, cwd, run_id, invocation):
             _append_jsonl(SCAN_ROOT / "internal-sessions.jsonl", {
                 "at": now_iso(), "run_id": run_id, "executor": name, "session_id": session_id,
             })
+        _executor_event(
+            preset, "executor_completed", run_id, invocation,
+            executor=name,
+            duration_ms=record["duration_ms"],
+            returncode=result.returncode,
+            usage_status=record["usage_status"],
+            output=record["output"],
+            stdout=record["stdout"],
+            stderr=record["stderr"],
+        )
         return payload, record
     except Exception as exc:
         record["error"] = str(exc)
+        _executor_event(
+            preset, "executor_output_invalid", run_id, invocation,
+            executor=name,
+            duration_ms=record["duration_ms"],
+            error=record["error"],
+            stdout=record["stdout"],
+            stderr=record["stderr"],
+        )
         return None, record
 
 
@@ -810,9 +1132,10 @@ def run_executor_with_retries(
     records = []
     payload = None
     retry_errors = []
+    retry_trigger = None
     for attempt in range(1, max(1, max_attempts) + 1):
         attempt_prompt = prompt
-        if attempt > 1:
+        if attempt > 1 and retry_trigger != "timeout":
             details = "\n".join(f"- {error}" for error in retry_errors)
             attempt_prompt += (
                 "\n上一次输出未通过校验。请根据以下具体错误修正后重新输出完整 JSON；"
@@ -822,6 +1145,8 @@ def run_executor_with_retries(
             name, preset, attempt_prompt, cwd, run_id, f"{invocation}:attempt:{attempt}"
         )
         record["attempt"] = attempt
+        if attempt > 1:
+            record["retry_trigger"] = retry_trigger
         records.append(record)
         if payload is not None and validate_payload is not None:
             validation_errors = validate_payload(payload)
@@ -829,13 +1154,29 @@ def run_executor_with_retries(
                 record["validation_errors"] = validation_errors
                 record["error"] = "invalid summary output: " + "; ".join(validation_errors)
                 retry_errors = validation_errors
+                retry_trigger = "validation"
                 payload = None
-                continue
-        if payload is not None:
+            else:
+                return payload, records
+        elif payload is not None:
             return payload, records
+        if attempt >= max(1, max_attempts):
+            continue
         retry_errors = [record.get("error", "executor output could not be parsed")]
         if record.get("timed_out"):
-            break
+            retry_trigger = "timeout"
+        elif retry_trigger != "validation":
+            retry_trigger = "executor_output"
+        record["retry_scheduled"] = True
+        record["retry_trigger"] = retry_trigger
+        _executor_event(
+            preset, "executor_retry_scheduled", run_id, invocation,
+            executor=name,
+            completed_attempt=attempt,
+            next_attempt=attempt + 1,
+            retry_trigger=retry_trigger,
+            error=record.get("error"),
+        )
     return None, records
 
 
@@ -945,6 +1286,7 @@ def _cleanup_candidate_hints(session, status, reason, *, dry_run=False):
         "unchanged",
         "excluded_internal",
         "excluded_automation",
+        "excluded_subagent",
         "no_semantic_messages",
     }
     if not should_remove:
@@ -974,34 +1316,56 @@ def discover(config, since=None):
         if previous is None or (path.stat().st_size, path.stat().st_mtime) > (
             previous[0].stat().st_size, previous[0].stat().st_mtime
         ):
-            source_by_session[session_id] = (path, meta)
-    for session_id, (path, meta) in sorted(
+            source_by_session[session_id] = (path, meta, "codex")
+    for session_id, path, meta in _antigravity_session_entries(lookback, cutoff_epoch=cutoff_epoch):
+        previous = source_by_session.get(session_id)
+        if previous is None or (path.stat().st_size, path.stat().st_mtime) > (
+            previous[0].stat().st_size, previous[0].stat().st_mtime
+        ):
+            source_by_session[session_id] = (path, meta, "antigravity")
+    for session_id, (path, meta, source_kind) in sorted(
         source_by_session.items(), key=lambda item: (item[1][0].stat().st_mtime, str(item[1][0]))
     ):
         stat = path.stat()
         candidate = candidate_hints["by_session"].get(session_id) or candidate_hints["by_path"].get(str(path))
+        if source_kind == "antigravity" and candidate is None and path.name == "transcript_full.jsonl":
+            candidate = candidate_hints["by_path"].get(str(path.with_name("transcript.jsonl")))
+        if candidate and candidate.get("cwd") and not meta.get("cwd"):
+            meta = {**meta, "cwd": candidate["cwd"]}
         state = _read_json(_state_path(session_id), {}) or {}
         cursor = int(state.get("processed_offset", 0))
         parsed = _unparsed_session(path, stat, meta, state, cursor)
         snapshot_changed = bool(candidate) and not _candidate_matches_transcript(candidate, path, stat)
         reason = None
         target = None
+        ag_is_idle = (
+            source_kind == "antigravity"
+            and meta.get("ag_status") == "CASCADE_RUN_STATUS_IDLE"
+            and not meta.get("not_fully_idle")
+        )
         if session_id in internal_ids or str(session_id).startswith("dev-memory-summary-") or parsed["internal_marker"]:
             reason = "excluded_internal"
         elif meta.get("thread_source") == "automation":
             reason = "excluded_automation"
-        elif not candidate:
+        elif source_kind == "antigravity" and (meta.get("parent_conversation_id") or int(meta.get("nesting_depth") or 0) > 0):
+            reason = "excluded_subagent"
+        elif not candidate and not ag_is_idle:
             reason = "not_stopped"
         elif stat.st_size <= cursor:
             reason = "unchanged"
         elif time.time() - stat.st_mtime < idle_seconds:
             reason = "not_idle"
         if not reason:
+            fail_state = _read_json(_failure_state_path(session_id), {}) or {}
+            fail_reason = _session_failure_gate(fail_state, stat.st_size, config)
+            if fail_reason:
+                reason = fail_reason
+        if not reason:
             target, target_error = resolve_target(meta.get("cwd"))
             if target_error:
                 reason = target_error
         if not reason:
-            parsed = parse_codex_session(path, cursor)
+            parsed = parse_session(path, cursor, source_kind=source_kind, meta=meta)
             final_stat = path.stat()
             if (final_stat.st_size, final_stat.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
                 parsed = _unparsed_session(path, final_stat, meta, state, cursor)
@@ -1066,7 +1430,55 @@ def _skipped_running_run(run_id, started, *, dry_run=False, scheduled=False):
     }
 
 
+def _session_failure_gate(state, current_size, config):
+    """Return a skip reason if this session is cooling down or quarantined after failures.
+
+    If the transcript has grown since the last failure, lift the cooldown so new
+    conversation turns can be processed.
+    """
+    failures = int((state or {}).get("consecutive_failures", 0) or 0)
+    if failures <= 0:
+        return None
+    failed_at_size = int((state or {}).get("failed_at_size", 0) or 0)
+    if current_size > failed_at_size:
+        return None
+    max_failures = int(config.get("max_session_failures", 5) or 0)
+    if max_failures > 0 and failures >= max_failures:
+        return "failure_quarantined"
+    retry_after = float((state or {}).get("next_retry_after_epoch", 0) or 0)
+    if retry_after > time.time():
+        return "failure_backoff"
+    return None
+
+
+def _record_session_failure(session, error_message, config):
+    fail_path = _failure_state_path(session["session_id"])
+    existing = _read_json(fail_path, {}) or {}
+    failures = int(existing.get("consecutive_failures", 0) or 0) + 1
+    schedule = config.get("failure_backoff_minutes") or [30, 120, 360, 1440]
+    if not isinstance(schedule, list) or not schedule:
+        schedule = [30, 120, 360, 1440]
+    idx = min(failures - 1, len(schedule) - 1)
+    backoff_minutes = max(1, int(schedule[idx]))
+    retry_epoch = time.time() + backoff_minutes * 60
+    updated = {
+        "schema_version": SCHEMA_VERSION,
+        "session_id": session["session_id"],
+        "path": session["path"],
+        "consecutive_failures": failures,
+        "failed_at_size": int(session.get("size") or 0),
+        "last_failed_at": now_iso(),
+        "last_error": str(error_message or "failed")[:1000],
+        "next_retry_after_epoch": retry_epoch,
+        "next_retry_after": dt.datetime.fromtimestamp(retry_epoch, dt.timezone.utc).isoformat(),
+        "updated_at": now_iso(),
+    }
+    _atomic_json(fail_path, updated)
+    return updated
+
+
 def _advance_session_state(session):
+    _failure_state_path(session["session_id"]).unlink(missing_ok=True)
     state_path = _state_path(session["session_id"])
     existing = _read_json(state_path, {}) or {}
     existing_offset = int(existing.get("processed_offset", 0))
@@ -1098,8 +1510,14 @@ def _execute_sessions(config, args, sessions, run_id, started, *, activity=None,
         executor_name, preset = choose_executor(executor_config)
         preset = dict(preset)
         preset["_timeout_seconds"] = int(config.get("invocation_timeout_seconds", 600))
+        preset["_event_log_path"] = str(SCAN_ROOT / "logs" / "executor-events.jsonl")
     invocations = []
     results = []
+    cb_threshold = int(config.get("circuit_breaker_threshold", 3) or 0)
+    consecutive_run_failures = 0
+    run_done_count = 0
+    circuit_breaker_triggered = False
+    circuit_breaker_skipped = 0
     for session in sessions:
         audit = {
             "schema_version": SCHEMA_VERSION,
@@ -1135,6 +1553,13 @@ def _execute_sessions(config, args, sessions, run_id, started, *, activity=None,
                 audit.get("reason"),
                 dry_run=bool(args.dry_run),
             )
+            continue
+        if circuit_breaker_triggered:
+            circuit_breaker_skipped += 1
+            audit["status"] = "skipped"
+            audit["reason"] = "circuit_breaker_open"
+            results.append(audit)
+            _atomic_json(_session_audit_path(session["session_id"]), audit)
             continue
         semantic_chars = sum(len(item["text"]) for item in session["messages"])
         audit["input_mode"] = "agentic_file"
@@ -1198,9 +1623,18 @@ def _execute_sessions(config, args, sessions, run_id, started, *, activity=None,
         if not failed and audit["status"] in {"done", "skipped_summary"}:
             audit["cursor_after"] = session["end_offset"]
             audit["state_offset_after"] = _advance_session_state(session)
+            run_done_count += 1
+            consecutive_run_failures = 0
         if failed:
             audit["status"] = "failed"
             audit["error"] = failed
+            if run_kind == "scan":
+                fail_state = _record_session_failure(session, failed, config)
+                audit["consecutive_failures"] = fail_state.get("consecutive_failures")
+                audit["next_retry_after"] = fail_state.get("next_retry_after")
+                consecutive_run_failures += 1
+                if cb_threshold > 0 and run_done_count == 0 and consecutive_run_failures >= cb_threshold:
+                    circuit_breaker_triggered = True
         audit["summary_usage"], audit["usage_unavailable_invocations"] = _sum_usage(invocations[invocation_start:])
         audit["executor"] = executor_name
         audit["model"] = preset.get("model")
@@ -1245,11 +1679,74 @@ def _execute_sessions(config, args, sessions, run_id, started, *, activity=None,
         "invocations": invocations,
         "sessions": results,
     }
+    if circuit_breaker_triggered:
+        run["circuit_breaker"] = {
+            "triggered": True,
+            "consecutive_failures": consecutive_run_failures,
+            "threshold": cb_threshold,
+            "skipped_candidates": circuit_breaker_skipped,
+        }
     if replay_source:
         run["replay_source"] = replay_source
     _persist_scan_run(run, "scan_completed")
     print(json.dumps(run, ensure_ascii=False, indent=2) if args.json else _format_run(run))
     return 1 if run["failed_count"] else 0
+
+
+def _should_run_daily_housekeeping(config):
+    if not config.get("daily_housekeeping_enabled", True):
+        return False
+    state = _read_json(SCAN_ROOT / "daily-housekeeping-state.json", {}) or {}
+    today = dt.datetime.now().strftime("%Y-%m-%d")
+    return state.get("last_run_date") != today
+
+
+def _maybe_run_daily_housekeeping(config, *, scheduled=False):
+    if not scheduled or not _should_run_daily_housekeeping(config):
+        return None
+    import dev_memory_daily as daily
+    return daily.run_daily_housekeeping(
+        sys.modules[__name__],
+        config,
+        dry_run=False,
+        scheduled=True,
+    )
+
+
+def command_daily(args):
+    import dev_memory_daily as daily
+
+    with _session_scan_lock() as acquired:
+        if not acquired:
+            raise RuntimeError("another session-scan process is already running")
+        config = load_config()
+        validation = validate_config(config)
+        if not validation["valid"]:
+            raise RuntimeError("; ".join(validation["errors"]))
+        report = daily.run_daily_housekeeping(
+            sys.modules[__name__],
+            config,
+            dry_run=bool(args.dry_run),
+            scheduled=bool(getattr(args, "scheduled", False)),
+            force=bool(getattr(args, "force", False)),
+            skip_prune=bool(getattr(args, "skip_prune", False)),
+            skip_tidy=bool(getattr(args, "skip_tidy", False)),
+            max_targets=getattr(args, "max_targets", None),
+            executor_override=getattr(args, "executor", None),
+        )
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            prune = report["prune"]
+            tidy = report["tidy"]
+            print(
+                f"daily {report['run_id']}: pruned={prune.get('pruned_count', 0)} empty repos, "
+                f"drifts={report['drift_count']}, tidy={tidy['done_count']} done / "
+                f"{tidy['summary_skipped_count']} skipped / {tidy['failed_count']} failed "
+                f"({tidy['skipped_unchanged_count']} unchanged skipped); "
+                f"tokens {_format_tokens(report.get('summary_usage'))}"
+            )
+        return 1 if report["failed_count"] else 0
 
 
 def run_scan(args):
@@ -1279,7 +1776,13 @@ def run_scan(args):
                 "first_lookback_days": lookback_days,
             })
         sessions = discover(config, args.since)
-        return _execute_sessions(config, args, sessions, run_id, started, activity=None)
+        exit_code = _execute_sessions(config, args, sessions, run_id, started, activity=None)
+        if not args.dry_run and getattr(args, "scheduled", False):
+            try:
+                _maybe_run_daily_housekeeping(config, scheduled=True)
+            except Exception as exc:
+                print(f"[dev-memory][daily] skipped: {exc}", file=sys.stderr)
+        return exit_code
 
 
 def _format_tokens(usage):
@@ -1415,12 +1918,19 @@ def _replay_session(source_run_id, audit):
             if root.exists()
             for candidate in root.rglob(f"*{session_id}*.jsonl")
         ]
+        for ag_home in _antigravity_homes():
+            logs_dir = ag_home / "brain" / str(session_id) / ".system_generated" / "logs"
+            for name in ("transcript_full.jsonl", "transcript.jsonl"):
+                candidate = logs_dir / name
+                if candidate.is_file():
+                    matches.append(candidate)
+                    break
         if not matches:
             raise RuntimeError(f"session transcript not found: {session_id}")
         path = max(matches, key=lambda item: (item.stat().st_size, item.stat().st_mtime))
     cursor_before = int(audit.get("cursor_before", 0))
     cursor_after = int(audit.get("cursor_after") or audit.get("raw_size") or 0)
-    parsed = parse_codex_session(path, cursor_before)
+    parsed = parse_session(path, cursor_before)
     if cursor_after <= cursor_before or cursor_after > parsed["size"]:
         raise RuntimeError(
             f"invalid replay cursor for {session_id}: {cursor_before}..{cursor_after}, size={parsed['size']}"
@@ -1543,6 +2053,7 @@ def command_status(_args):
         "plist": str(PLIST_PATH),
         "scan_root": str(SCAN_ROOT),
         "codex_sessions": str(CODEX_HOME / "sessions"),
+        "antigravity_sessions": [str(home / "brain") for home in _antigravity_homes() if (home / "brain").exists()],
         "executor": executor,
         "model": preset.get("model") if preset else None,
         "poll_interval_minutes": config.get("poll_interval_minutes"),
@@ -1600,6 +2111,15 @@ def build_parser():
     run.add_argument("--json", action="store_true")
     run.add_argument("--scheduled", action="store_true", help="Mark a LaunchAgent polling run")
     run.add_argument("--executor", help="Override the configured executor for this run only")
+    daily_cmd = sub.add_parser("daily", help="Run daily housekeeping: prune empty repos, detect drift, auto-tidy changed branches")
+    daily_cmd.add_argument("--dry-run", action="store_true")
+    daily_cmd.add_argument("--json", action="store_true")
+    daily_cmd.add_argument("--scheduled", action="store_true")
+    daily_cmd.add_argument("--force", action="store_true", help="Ignore last-tidy fingerprint and 24h lookback")
+    daily_cmd.add_argument("--skip-prune", action="store_true")
+    daily_cmd.add_argument("--skip-tidy", action="store_true")
+    daily_cmd.add_argument("--max-targets", type=int)
+    daily_cmd.add_argument("--executor", help="Override the configured executor for this daily run only")
     sub.add_parser("install")
     sub.add_parser("status")
     stats = sub.add_parser("stats")
@@ -1642,6 +2162,7 @@ def main():
     args = build_parser().parse_args()
     handlers = {
         "run": run_scan,
+        "daily": command_daily,
         "install": command_install,
         "status": command_status,
         "stats": command_stats,

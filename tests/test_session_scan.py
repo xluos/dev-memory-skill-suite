@@ -161,7 +161,7 @@ def test_config_defaults_prefer_claude_then_codex_and_keep_coco_preset():
     config = scan.default_scan_config()
     assert config["executor"] == "auto"
     assert config["order"] == ["claude", "codex"]
-    assert set(config["executors"]) == {"coco", "codex", "claude"}
+    assert set(config["executors"]) == {"coco", "codex", "claude", "traecli"}
     assert config["poll_interval_minutes"] == 10
     assert config["idle_minutes"] == 30
     assert config["invocation_timeout_seconds"] == 600
@@ -599,7 +599,7 @@ def test_covered_bytes_deduplicates_repeated_observations():
     assert scan._covered_bytes([(0, 100), (0, 100), (100, 140), (120, 160)]) == 160
 
 
-def test_executor_timeout_is_a_single_failed_attempt(tmp_path, monkeypatch):
+def test_executor_timeout_retries_up_to_max_attempts(tmp_path, monkeypatch):
     monkeypatch.setattr(
         scan.subprocess,
         "run",
@@ -617,9 +617,67 @@ def test_executor_timeout_is_a_single_failed_attempt(tmp_path, monkeypatch):
     )
 
     assert payload is None
-    assert len(records) == 1
-    assert records[0]["timed_out"] is True
-    assert records[0]["timeout_seconds"] == 30
+    assert len(records) == 2
+    assert all(record["timed_out"] is True for record in records)
+    assert all(record["timeout_seconds"] == 30 for record in records)
+    assert records[0]["retry_scheduled"] is True
+    assert records[0]["retry_trigger"] == "timeout"
+    assert records[1]["retry_trigger"] == "timeout"
+
+
+def test_executor_timeout_retry_reuses_the_original_prompt(tmp_path, monkeypatch):
+    prompts = []
+    results = [
+        (None, {"timed_out": True, "error": "executor timed out after 30 seconds"}),
+        ({"skip_reason": "没有新增价值"}, {"returncode": 0}),
+    ]
+
+    def fake_run_executor(_name, _preset, prompt, _cwd, _run_id, invocation):
+        prompts.append(prompt)
+        payload, record = results.pop(0)
+        return payload, {"invocation": invocation, **record}
+
+    monkeypatch.setattr(scan, "run_executor", fake_run_executor)
+    payload, records = scan.run_executor_with_retries(
+        "fake",
+        {"command": "fake"},
+        "original prompt",
+        str(tmp_path),
+        "run-timeout-retry",
+        "session-1:final",
+        2,
+        scan._agent_summary_payload_validation_errors,
+    )
+
+    assert payload == {"skip_reason": "没有新增价值"}
+    assert prompts == ["original prompt", "original prompt"]
+    assert records[0]["retry_scheduled"] is True
+    assert records[1]["retry_trigger"] == "timeout"
+
+
+def test_executor_timeout_logs_partial_output_metadata(tmp_path, monkeypatch):
+    event_log = tmp_path / "executor-events.jsonl"
+
+    def raise_timeout(*_args, **_kwargs):
+        exc = scan.subprocess.TimeoutExpired("fake", 30, output="partial output", stderr="waiting")
+        raise exc
+
+    monkeypatch.setattr(scan.subprocess, "run", raise_timeout)
+    payload, record = scan.run_executor(
+        "fake",
+        {"command": "fake", "_timeout_seconds": 30, "_event_log_path": str(event_log)},
+        "prompt",
+        str(tmp_path),
+        "run-timeout-log",
+        "session-1:final:attempt:1",
+    )
+
+    events = [json.loads(line) for line in event_log.read_text(encoding="utf-8").splitlines()]
+    assert payload is None
+    assert record["stdout"]["chars"] == len("partial output")
+    assert record["stderr"]["chars"] == len("waiting")
+    assert [event["event"] for event in events] == ["executor_started", "executor_timed_out"]
+    assert "partial output" not in event_log.read_text(encoding="utf-8")
 
 
 def test_schema_validation_error_is_returned_to_executor_for_second_attempt(tmp_path, monkeypatch):

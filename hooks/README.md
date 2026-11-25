@@ -197,11 +197,12 @@ Codex preset 固定使用 `codex exec --ephemeral --json`，总结调用不会�
   sessions/                      # 原始大小、分块和用量摘要
   runs/                          # 每次扫描记录
   logs/                          # LaunchAgent stdout/stderr
+    executor-events.jsonl        # 执行器开始/完成/超时/重试事件；只存输出元数据
   events.jsonl
   internal-sessions.jsonl
 ```
 
-每个 run 记录原文件大小、本轮新增字节、语义消息和字符数、原会话累计 token、每次总结调用的执行器/模型/耗时/token，以及成功、跳过和失败状态。执行器没有返回 usage 时写为 `unavailable`，不会伪装成 0。
+每个 run 记录原文件大小、本轮新增字节、语义消息和字符数、原会话累计 token、每次总结调用的执行器/模型/耗时/token，以及成功、跳过和失败状态。执行器没有返回 usage 时写为 `unavailable`，不会伪装成 0。单次调用超时后会按 `max_attempts` 使用原始 prompt 重试；`logs/executor-events.jsonl` 会即时记录开始、完成、超时与重试原因，并仅保留 stdout/stderr 的大小、行数和哈希，避免把总结正文复制到账本。
 
 ```bash
 dev-memory-cli session-scan run --dry-run --json
