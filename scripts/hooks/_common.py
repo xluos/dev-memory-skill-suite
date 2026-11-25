@@ -122,8 +122,52 @@ def read_hook_input():
         return {"raw": raw[:4000]}
 
 
+def is_antigravity_hook(hook_input=None):
+    client = os.environ.get("DEV_MEMORY_HOOK_CLIENT", "").strip().lower()
+    if client in {"antigravity", "agy"}:
+        return True
+    if not isinstance(hook_input, dict):
+        return False
+    return bool(
+        hook_input.get("conversationId")
+        or hook_input.get("artifactDirectoryPath")
+        or isinstance(hook_input.get("workspacePaths"), list)
+    )
+
+
+def _hook_workspace_cwd(hook_input):
+    if not isinstance(hook_input, dict):
+        return None
+    candidates = [hook_input.get("cwd")]
+    workspace_paths = hook_input.get("workspacePaths")
+    if isinstance(workspace_paths, list):
+        candidates.extend(workspace_paths)
+    for item in candidates:
+        if isinstance(item, str) and item.strip():
+            path = Path(item.strip()).expanduser()
+            if path.exists() and path.is_dir():
+                return path.resolve()
+    return None
+
+
+def set_repo_root_from_hook_input(hook_input):
+    """Prefer hook payload cwd/workspacePaths when --repo was not explicitly set.
+
+    Antigravity runs global hooks with process cwd set to the directory
+    containing hooks.json (~/.gemini/config), while passing the agent's real
+    working directory in stdin JSON (`cwd` and `workspacePaths`).
+    """
+    global REPO_ROOT
+    if os.environ.get("DEV_MEMORY_HOOK_REPO_EXPLICIT") == "1":
+        return REPO_ROOT
+    resolved = _hook_workspace_cwd(hook_input)
+    if resolved is not None:
+        REPO_ROOT = resolved
+    return REPO_ROOT
+
+
 def register_session_scan_candidate(hook_input):
-    """Persist a lightweight Codex Stop hint without starting summarization."""
+    """Persist a lightweight Stop hint without starting summarization."""
     if not isinstance(hook_input, dict):
         return None
     session_id = hook_session_id(hook_input)
@@ -133,14 +177,19 @@ def register_session_scan_candidate(hook_input):
     source = session_id or transcript_path
     digest = hashlib.sha1(str(source).encode("utf-8")).hexdigest()[:20]
     path = DEV_MEMORY_HOME / "jobs" / "session-scan" / "candidates" / f"{digest}.json"
+    client = "antigravity" if is_antigravity_hook(hook_input) else (
+        os.environ.get("DEV_MEMORY_HOOK_CLIENT", "").strip().lower() or None
+    )
+    resolved_cwd = _hook_workspace_cwd(hook_input)
     _atomic_write_json(path, {
         "schema_version": 1,
         "event": "Stop",
+        "client": client,
         "registered_at": now_iso(),
         "session_id": session_id,
         "transcript_path": transcript_path,
         "transcript_state": _transcript_state(transcript_path),
-        "cwd": _first_string(hook_input.get("cwd"), str(REPO_ROOT)),
+        "cwd": str(resolved_cwd) if resolved_cwd is not None else _first_string(hook_input.get("cwd"), str(REPO_ROOT)),
     })
     return path
 
@@ -412,13 +461,27 @@ _RECENT_FIRST_SECTIONS = {
     ("glossary", "分支源资料入口"),
 }
 
-_BRANCH_REFERENCE_SECTIONS = {
-    ("glossary", "当前有效上下文"),
-    ("glossary", "分支源资料入口"),
-    ("progress", "功能文件索引"),
+_FULL_SECTION_QUOTAS = {
+    ("progress", "功能文件索引"): (48, 3600),
+    ("progress", "建议优先查看的目录"): (12, 800),
+    ("repo_decisions", None): (24, 2400),
+    ("repo_glossary", None): (20, 1800),
+    ("repo_overview", None): (16, 1500),
+    ("decisions", "关键决策与原因"): (36, 3600),
+    ("risks", "阻塞与注意点"): (28, 2800),
+    ("risks", "后续继续前要注意"): (16, 1600),
+    ("overview", "当前目标"): (10, 900),
+    ("overview", "范围边界"): (8, 700),
+    ("overview", "关键约束"): (12, 1200),
+    ("glossary", "分支源资料入口"): (16, 1600),
+    ("glossary", "当前有效上下文"): (16, 1800),
 }
-_BRANCH_REF_MAX_LINES = 128
-_BRANCH_REF_MAX_CHARS = 12000
+_BRANCH_BLOAT_WARN_BYTES = 80 * 1024
+_PENDING_PROMOTION_WARN_BYTES = 8 * 1024
+_DIRTY_PLACEHOLDER_LINES = (
+    "可独立理解的完整结论",
+    "简短标题",
+)
 
 _REPO_LEVEL_KEYS = {
     "repo_overview",
@@ -489,6 +552,42 @@ def _extract_sections(paths, keys, *, repo_newest_first=False):
     return out
 
 
+def _branch_health_warnings(paths):
+    warnings = []
+    branch_keys = ("overview", "progress", "decisions", "risks", "glossary", "unsorted")
+    total_bytes = 0
+    dirty_files = []
+    for key in branch_keys:
+        p = paths.get(key)
+        if not p or not p.is_file():
+            continue
+        try:
+            size = p.stat().st_size
+            total_bytes += size
+            if key in ("decisions", "risks", "glossary"):
+                text = p.read_text(encoding="utf-8", errors="ignore")
+                for line in text.splitlines():
+                    stripped = re.sub(r"^[\s\-*]+", "", line).strip()
+                    if stripped in _DIRTY_PLACEHOLDER_LINES:
+                        dirty_files.append(p.name)
+                        break
+        except OSError:
+            continue
+    if total_bytes >= _BRANCH_BLOAT_WARN_BYTES:
+        warnings.append(f"分支记忆累计 {total_bytes / 1024:.0f} KB")
+    pending = paths.get("pending_promotion")
+    if pending and pending.is_file():
+        try:
+            psize = pending.stat().st_size
+            if psize >= _PENDING_PROMOTION_WARN_BYTES:
+                warnings.append(f"pending-promotion.md 已积攒 {psize / 1024:.1f} KB")
+        except OSError:
+            pass
+    if dirty_files:
+        warnings.append(f"检测到残缺占位条目（{', '.join(sorted(set(dirty_files)))}）")
+    return warnings
+
+
 def _build_context_from_assets(assets, *, full=True, heading=None, brief_profile="standard"):
     if not assets["branch_dir"].exists():
         # Memory is opt-in. A missing branch directory stays silent in
@@ -525,11 +624,11 @@ def _build_context_from_assets(assets, *, full=True, heading=None, brief_profile
             continue
         if not full and (file_key, source_title) in brief_limits:
             eff_lines, eff_chars, prefer_recent = brief_limits[(file_key, source_title)]
+        elif full and (file_key, source_title) in _FULL_SECTION_QUOTAS:
+            eff_lines, eff_chars = _FULL_SECTION_QUOTAS[(file_key, source_title)]
+            prefer_recent = (file_key, source_title) in _RECENT_FIRST_SECTIONS
         elif full and file_key in _REPO_LEVEL_KEYS:
             eff_lines, eff_chars = _REPO_MAX_LINES, _REPO_MAX_CHARS
-            prefer_recent = (file_key, source_title) in _RECENT_FIRST_SECTIONS
-        elif full and (file_key, source_title) in _BRANCH_REFERENCE_SECTIONS:
-            eff_lines, eff_chars = _BRANCH_REF_MAX_LINES, _BRANCH_REF_MAX_CHARS
             prefer_recent = (file_key, source_title) in _RECENT_FIRST_SECTIONS
         else:
             eff_lines, eff_chars = max_lines, max_chars
@@ -617,6 +716,14 @@ def _build_context_from_assets(assets, *, full=True, heading=None, brief_profile
                 "",
                 f"归档分支查询：`grep -r 'KEYWORD' {archive_dir}/` （体量大时派 Task 子 agent）",
             ])
+        if full:
+            health_notes = _branch_health_warnings(paths)
+            if health_notes:
+                footer_lines.extend([
+                    "",
+                    "记忆健康提示：" + "；".join(health_notes)
+                    + "。建议运行 `dev-memory-cli maintain tidy` 或 `dev-memory-cli session-scan daily` 清理压缩。",
+                ])
         footer_lines.extend(["", "新增会话语义由定期 session-scan 沉淀；主动查旧记忆使用 `dev-memory-read`。"])
         parts.append("\n".join(footer_lines))
 
@@ -845,18 +952,32 @@ def hook_session_id(hook_input):
     return _first_string(
         hook_input.get("session_id") if isinstance(hook_input, dict) else None,
         hook_input.get("sessionId") if isinstance(hook_input, dict) else None,
+        hook_input.get("conversation_id") if isinstance(hook_input, dict) else None,
+        hook_input.get("conversationId") if isinstance(hook_input, dict) else None,
         _hook_payload_value(hook_input, "payload", "session_id"),
         _hook_payload_value(hook_input, "payload", "sessionId"),
+        _hook_payload_value(hook_input, "payload", "conversation_id"),
+        _hook_payload_value(hook_input, "payload", "conversationId"),
     )
 
 
 def _hook_transcript_path(hook_input):
-    return _first_string(
+    raw = _first_string(
         hook_input.get("transcript_path") if isinstance(hook_input, dict) else None,
         hook_input.get("transcriptPath") if isinstance(hook_input, dict) else None,
         _hook_payload_value(hook_input, "payload", "transcript_path"),
         _hook_payload_value(hook_input, "payload", "transcriptPath"),
     )
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    # Antigravity writes both compact transcript.jsonl (with truncated_fields)
+    # and full transcript_full.jsonl side-by-side. Prefer the untruncated file.
+    if path.name == "transcript.jsonl":
+        full_path = path.with_name("transcript_full.jsonl")
+        if full_path.exists():
+            return str(full_path)
+    return raw
 
 
 def _session_start_source(hook_input):

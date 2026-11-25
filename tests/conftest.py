@@ -21,6 +21,12 @@ import pytest
 from dev_memory_common import ensure_branch_paths_exist
 
 
+@pytest.fixture(autouse=True)
+def _isolate_antigravity_homes(tmp_path, monkeypatch):
+    """Prevent tests from accidentally scanning real ~/.gemini/antigravity sessions."""
+    monkeypatch.setenv("DEV_MEMORY_ANTIGRAVITY_HOMES", str(tmp_path / "empty-antigravity"))
+
+
 @pytest.fixture
 def tmp_storage_root(tmp_path):
     """Per-test ~/.dev-memory replacement. Returns the Path."""

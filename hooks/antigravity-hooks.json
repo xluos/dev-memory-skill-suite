@@ -1,0 +1,18 @@
+{
+  "dev-memory": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "dev-memory-cli hook session-start --client antigravity",
+        "timeout": 20
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "dev-memory-cli hook stop --client antigravity",
+        "timeout": 15
+      }
+    ]
+  }
+}

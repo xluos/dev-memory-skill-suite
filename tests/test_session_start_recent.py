@@ -269,3 +269,62 @@ def test_primary_repo_name_env_overrides_workspace_local_config(monkeypatch, wor
     monkeypatch.setenv("DEV_MEMORY_PRIMARY_REPO", "repo-b")
 
     assert hook_common.primary_repo_name() == "repo-b"
+
+
+def test_session_start_balances_glossary_vs_decisions_and_risks(branch_dir, seed_branch_files):
+    seed_branch_files({
+        "glossary": (
+            "# 术语与源资料\n\n"
+            "## 当前有效上下文\n\n"
+            + "\n\n".join(f"- 历史上下文条目 {i}: " + ("x" * 120) for i in range(40))
+            + "\n"
+        ),
+        "decisions": (
+            "# 分支决策\n\n"
+            "## 关键决策与原因\n\n"
+            + "\n\n".join(f"- 核心决策 {i}: 保留完整架构决策说明" for i in range(25))
+            + "\n"
+        ),
+        "risks": (
+            "# 阻塞与注意点\n\n"
+            "## 阻塞与注意点\n\n"
+            + "\n\n".join(f"- 重要风险 {i}: 需要规避的线上坑点" for i in range(20))
+            + "\n"
+        ),
+    })
+    assets = {
+        "branch_dir": branch_dir["branch_dir"],
+        "branch_name": branch_dir["branch_name"],
+        "paths": branch_dir["paths"],
+    }
+    ctx = _build_context_from_assets(assets, full=True)
+    # Glossary must be capped well below 12000 chars and truncated.
+    glossary_block = ctx.split("当前有效上下文:\n", 1)[1].split("\n\n阻塞与注意点:\n", 1)[0]
+    assert len(glossary_block) <= 2000
+    assert "↪ 完整: glossary.md" in glossary_block
+    # Decisions and risks get guaranteed multi-entry budgets (far more than 2 entries).
+    assert "核心决策 24" in ctx
+    assert "核心决策 18" in ctx
+    assert "重要风险 19" in ctx
+    assert "重要风险 14" in ctx
+
+
+def test_session_start_emits_health_warning_for_dirty_placeholder_and_bloat(branch_dir, seed_branch_files):
+    seed_branch_files({
+        "decisions": (
+            "# 分支决策\n\n"
+            "## 关键决策与原因\n\n"
+            "- 可独立理解的完整结论\n\n"
+            + ("\n\n".join(f"- 长条目 {i}: " + ("a" * 300) for i in range(300)))
+            + "\n"
+        ),
+    })
+    assets = {
+        "branch_dir": branch_dir["branch_dir"],
+        "branch_name": branch_dir["branch_name"],
+        "paths": branch_dir["paths"],
+    }
+    ctx = _build_context_from_assets(assets, full=True)
+    assert "记忆健康提示" in ctx
+    assert "残缺占位条目" in ctx
+    assert "maintain tidy" in ctx

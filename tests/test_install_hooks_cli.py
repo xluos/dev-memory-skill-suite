@@ -94,6 +94,6 @@ def test_install_all_includes_both_trae_variants(tmp_path):
 
     reports, _ = run_cli(tmp_path, "install-hooks", "--all", "--repo", str(repo))
 
-    assert [report["agent"] for report in reports] == ["codex", "claude", "trae", "trae-cn"]
+    assert [report["agent"] for report in reports] == ["codex", "claude", "trae", "trae-cn", "antigravity"]
     assert (repo / ".trae" / "hooks.json").exists()
     assert (repo / ".trae-cn" / "hooks.json").exists()

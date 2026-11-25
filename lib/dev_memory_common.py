@@ -62,9 +62,39 @@ def now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _unquote_git_path(raw: str) -> str:
+    """Decode git C-style quoted paths (e.g. \"dir/\\344\\270\\255.md\") as a fallback."""
+    s = raw.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        inner = s[1:-1]
+        out = bytearray()
+        i = 0
+        n = len(inner)
+        escapes = {"n": b"\n", "t": b"\t", "r": b"\r", "\\": b"\\", '"': b'"'}
+        while i < n:
+            ch = inner[i]
+            if ch == "\\" and i + 1 < n:
+                nxt = inner[i + 1]
+                if nxt in escapes:
+                    out.extend(escapes[nxt])
+                    i += 2
+                    continue
+                if i + 3 < n and all(c in "01234567" for c in inner[i + 1 : i + 4]):
+                    out.append(int(inner[i + 1 : i + 4], 8))
+                    i += 4
+                    continue
+            out.extend(ch.encode("utf-8"))
+            i += 1
+        try:
+            return out.decode("utf-8")
+        except UnicodeDecodeError:
+            return s.strip('"')
+    return s
+
+
 def run_git(args, cwd, check=True):
     result = subprocess.run(
-        ["git", *args],
+        ["git", "-c", "core.quotepath=false", *args],
         cwd=cwd,
         check=False,
         capture_output=True,
@@ -1501,11 +1531,11 @@ def _files_in_recent_commits(repo_root, count, base_ref=None):
 
 
 def collect_git_facts(repo_root, branch_name, _storage_root=None):
-    working_tree_files = git_lines(["diff", "--name-only"], cwd=repo_root)
-    staged_files = git_lines(["diff", "--cached", "--name-only"], cwd=repo_root)
-    untracked_files = git_lines(["ls-files", "--others", "--exclude-standard"], cwd=repo_root)
+    working_tree_files = [_unquote_git_path(p) for p in git_lines(["diff", "--name-only"], cwd=repo_root)]
+    staged_files = [_unquote_git_path(p) for p in git_lines(["diff", "--cached", "--name-only"], cwd=repo_root)]
+    untracked_files = [_unquote_git_path(p) for p in git_lines(["ls-files", "--others", "--exclude-standard"], cwd=repo_root)]
     default_base = detect_default_base(repo_root)
-    recent_commit_files = _files_in_recent_commits(repo_root, RECENT_COMMITS_FOR_FOCUS, default_base)
+    recent_commit_files = [_unquote_git_path(p) for p in _files_in_recent_commits(repo_root, RECENT_COMMITS_FOR_FOCUS, default_base)]
 
     all_paths = sorted(set(working_tree_files + staged_files + untracked_files + recent_commit_files))
     return {
@@ -1549,7 +1579,7 @@ def merged_focus_areas(new_paths, existing, limit=None):
     if limit is None:
         limit = FOCUS_AREA_LIMIT
     existing = [d for d in existing
-                if "/" in d and not _should_exclude_path(d)]
+                if "/" in d and not d.startswith('"') and not _should_exclude_path(d)]
     if not existing:
         return summarize_focus_areas(new_paths, limit=limit)
 

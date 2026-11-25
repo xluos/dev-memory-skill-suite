@@ -9,7 +9,7 @@ const PACKAGE_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_STORAGE_ROOT = path.join(os.homedir(), ".dev-memory", "repos");
 const DEFAULT_CONFIG_PATH = process.env.DEV_MEMORY_CONFIG_PATH || path.join(os.homedir(), ".dev-memory", "config.json");
 const WORKSPACE_CONFIG_NAME = ".dev-memory-workspace.json";
-const SUPPORTED_HOOK_AGENTS = ["codex", "claude", "trae", "trae-cn"];
+const SUPPORTED_HOOK_AGENTS = ["codex", "claude", "trae", "trae-cn", "antigravity"];
 
 function fail(message) {
   process.stderr.write(`ERROR: ${message}\n`);
@@ -96,7 +96,7 @@ function buildSessionStartContext(repoRoot) {
   runPython(script, [], repoRoot, env);
 }
 
-function runHookAction(action, repoRoot) {
+function runHookAction(action, repoRoot, options = {}) {
   const scriptMap = {
     "session-start": packageScript("scripts", "hooks", "session_start.py"),
     "pre-compact": packageScript("scripts", "hooks", "pre_compact.py"),
@@ -111,6 +111,12 @@ function runHookAction(action, repoRoot) {
     DEV_MEMORY_HOOK_REPO_ROOT: repoRoot,
     DEV_ASSETS_HOOK_REPO_ROOT: repoRoot,
   };
+  if (options.repoExplicit) {
+    env.DEV_MEMORY_HOOK_REPO_EXPLICIT = "1";
+  }
+  if (options.client) {
+    env.DEV_MEMORY_HOOK_CLIENT = String(options.client);
+  }
   runPython(script, [], repoRoot, env);
 }
 
@@ -189,26 +195,37 @@ function ensureSessionSummaryConfig() {
   };
 }
 
+function normalizeHookAgent(agent) {
+  if (agent === "agy") return "antigravity";
+  return agent;
+}
+
 function templatePathForAgent(agent) {
-  if (agent === "codex") return packageScript("hooks", "codex-hooks.json");
-  if (agent === "claude") return packageScript("hooks", "hooks.json");
-  if (agent === "trae" || agent === "trae-cn") return packageScript("hooks", "trae-hooks.json");
+  const normalized = normalizeHookAgent(agent);
+  if (normalized === "codex") return packageScript("hooks", "codex-hooks.json");
+  if (normalized === "claude") return packageScript("hooks", "hooks.json");
+  if (normalized === "trae" || normalized === "trae-cn") return packageScript("hooks", "trae-hooks.json");
+  if (normalized === "antigravity") return packageScript("hooks", "antigravity-hooks.json");
   fail(`unsupported agent: ${agent}`);
 }
 
 function targetPathForAgent(agent, repoRoot) {
-  if (agent === "codex") return path.join(repoRoot, ".codex", "hooks.json");
-  if (agent === "claude") return path.join(repoRoot, ".claude", "settings.local.json");
-  if (agent === "trae") return path.join(repoRoot, ".trae", "hooks.json");
-  if (agent === "trae-cn") return path.join(repoRoot, ".trae-cn", "hooks.json");
+  const normalized = normalizeHookAgent(agent);
+  if (normalized === "codex") return path.join(repoRoot, ".codex", "hooks.json");
+  if (normalized === "claude") return path.join(repoRoot, ".claude", "settings.local.json");
+  if (normalized === "trae") return path.join(repoRoot, ".trae", "hooks.json");
+  if (normalized === "trae-cn") return path.join(repoRoot, ".trae-cn", "hooks.json");
+  if (normalized === "antigravity") return path.join(repoRoot, ".agents", "hooks.json");
   fail(`unsupported agent: ${agent}`);
 }
 
 function globalTargetPathForAgent(agent) {
-  if (agent === "codex") return path.join(os.homedir(), ".codex", "hooks.json");
-  if (agent === "claude") return path.join(os.homedir(), ".claude", "settings.json");
-  if (agent === "trae") return path.join(os.homedir(), ".trae", "hooks.json");
-  if (agent === "trae-cn") return path.join(os.homedir(), ".trae-cn", "hooks.json");
+  const normalized = normalizeHookAgent(agent);
+  if (normalized === "codex") return path.join(os.homedir(), ".codex", "hooks.json");
+  if (normalized === "claude") return path.join(os.homedir(), ".claude", "settings.json");
+  if (normalized === "trae") return path.join(os.homedir(), ".trae", "hooks.json");
+  if (normalized === "trae-cn") return path.join(os.homedir(), ".trae-cn", "hooks.json");
+  if (normalized === "antigravity") return path.join(os.homedir(), ".gemini", "config", "hooks.json");
   fail(`unsupported agent: ${agent}`);
 }
 
@@ -258,35 +275,53 @@ function mergeConfig(existingConfig, templateConfig) {
   return result;
 }
 
+function mergeAntigravityConfig(existingConfig, templateConfig) {
+  const result = existingConfig && typeof existingConfig === "object" && !Array.isArray(existingConfig)
+    ? { ...existingConfig }
+    : {};
+  for (const [hookName, hookSpec] of Object.entries(templateConfig || {})) {
+    result[hookName] = hookSpec;
+  }
+  return result;
+}
+
 function commandHook(positional, options) {
   const action = positional[0];
-  const repoRoot = path.resolve(options.repo || process.cwd());
-  runHookAction(action, repoRoot);
+  const repoExplicit = Boolean(options.repo && options.repo !== true);
+  const repoRoot = path.resolve(repoExplicit ? options.repo : process.cwd());
+  const client = options.client && options.client !== true ? String(options.client) : null;
+  runHookAction(action, repoRoot, { repoExplicit, client });
 }
 
 function installHooksForAgent(agent, options) {
+  const normalizedAgent = normalizeHookAgent(agent);
   const isGlobal = Boolean(options.global);
-  const template = loadJson(templatePathForAgent(agent));
+  const template = loadJson(templatePathForAgent(normalizedAgent));
   let targetPath;
   let scope;
   let repoRoot = null;
   if (isGlobal) {
-    targetPath = globalTargetPathForAgent(agent);
+    targetPath = globalTargetPathForAgent(normalizedAgent);
     scope = "global";
   } else {
     repoRoot = path.resolve(options.repo || process.cwd());
-    targetPath = targetPathForAgent(agent, repoRoot);
+    targetPath = targetPathForAgent(normalizedAgent, repoRoot);
     scope = "repo";
   }
   const existing = fs.existsSync(targetPath) ? loadJson(targetPath) : {};
-  const merged = mergeConfig(existing, template);
+  const merged = normalizedAgent === "antigravity"
+    ? mergeAntigravityConfig(existing, template)
+    : mergeConfig(existing, template);
   writeJson(targetPath, merged);
   const summaryConfig = ensureSessionSummaryConfig();
+  const events = normalizedAgent === "antigravity"
+    ? Object.keys((template["dev-memory"] || {})).filter((key) => key !== "enabled")
+    : Object.keys(template.hooks || {});
   const report = {
-    agent,
+    agent: normalizedAgent,
     scope,
     target: targetPath,
-    events: Object.keys(template.hooks || {}),
+    events,
     session_summary_config: summaryConfig,
   };
   if (repoRoot) report.repo_root = repoRoot;
