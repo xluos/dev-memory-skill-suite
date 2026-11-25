@@ -129,3 +129,32 @@ def test_ui_scan_overview_supports_run_pagination(tmp_path):
 def test_ui_run_detail_rejects_unsafe_run_id(tmp_path):
     data = _run_node(tmp_path / "session-scan", 'ui.buildSessionScanRunDetail("../secret")')
     assert data is None
+
+
+def test_ui_scan_time_range_and_token_buckets(tmp_path):
+    scan_root = tmp_path / "session-scan"
+    _write_run(scan_root)
+    runs_dir = scan_root / "runs"
+    base = json.loads((runs_dir / "run-1.json").read_text(encoding="utf-8"))
+    # Add a newer scheduled run 2 days later and a manual run 2 hours after that.
+    r2 = {**base, "run_id": "run-2", "started_at": "2026-07-26T01:00:00+00:00", "scheduled": True, "summary_usage": {"total_tokens": 500}}
+    r3 = {**base, "run_id": "run-3", "started_at": "2026-07-26T03:00:00+00:00", "scheduled": False, "summary_usage": {"total_tokens": 300}}
+    (runs_dir / "run-2.json").write_text(json.dumps(r2), encoding="utf-8")
+    (runs_dir / "run-3.json").write_text(json.dumps(r3), encoding="utf-8")
+
+    now_ms = 1785042000000  # 2026-07-26T05:00:00+00:00
+    day_data = _run_node(scan_root, f'ui.buildSessionScanData({{range: "24h", nowMs: {now_ms}}})')
+    assert day_data["all_run_count"] == 3
+    assert day_data["run_count"] == 2
+    assert day_data["bucket"] == "hour"
+    assert day_data["totals"]["scheduled_runs"] == 1
+    assert day_data["totals"]["manual_runs"] == 1
+    assert day_data["totals"]["total_tokens"] == 800
+    assert len(day_data["time_series"]) == 2
+    assert sum(item["tokens"] for item in day_data["time_series"]) == 800
+
+    all_data = _run_node(scan_root, f'ui.buildSessionScanData({{range: "all", bucket: "day", nowMs: {now_ms}}})')
+    assert all_data["run_count"] == 3
+    assert all_data["totals"]["scheduled_runs"] == 2
+    assert all_data["totals"]["total_tokens"] == 923
+    assert len(all_data["time_series"]) == 2

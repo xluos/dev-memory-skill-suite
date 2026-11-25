@@ -148,10 +148,45 @@ button { font-family: inherit; }
 }
 .run-summary {
   width: 100%; display: grid;
-  grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr) repeat(4, minmax(66px, auto)) 18px;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(160px, 0.8fr) repeat(5, minmax(66px, auto)) 18px;
   align-items: center; gap: 12px; padding: 12px 14px;
   border: 0; background: transparent; color: var(--fg); text-align: left; cursor: pointer;
 }
+.range-bar { display: inline-flex; gap: 4px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 999px; padding: 3px; }
+.range-btn {
+  border: 0; background: transparent; color: var(--fg-muted); font-size: 11px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer; transition: background 0.12s, color 0.12s;
+}
+.range-btn:hover { color: var(--fg); }
+.range-btn.active { background: var(--bg-active); color: var(--accent); font-weight: 600; }
+.token-panel {
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow-sm); margin-top: 12px;
+}
+.token-bars {
+  display: flex; align-items: flex-end; gap: 4px; height: 110px; padding-top: 10px;
+  border-bottom: 1px solid var(--border-subtle); overflow-x: auto;
+}
+.token-col {
+  flex: 1 0 14px; min-width: 14px; max-width: 44px; height: 100%;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px;
+}
+.token-bar {
+  width: 100%; min-height: 2px; border-radius: 3px 3px 0 0;
+  background: var(--accent); opacity: 0.85; transition: opacity 0.12s;
+}
+.token-bar.has-fail { background: var(--danger-fg); }
+.token-bar.zero { background: var(--idle-fg); opacity: 0.28; }
+.token-col:hover .token-bar { opacity: 1; }
+.token-axis {
+  display: flex; justify-content: space-between; margin-top: 6px;
+  color: var(--fg-subtle); font-size: 10px; font-variant-numeric: tabular-nums;
+}
+.run-kind-tag {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+  font-size: 9px; font-weight: 600; background: var(--bg-hover); color: var(--fg-muted); vertical-align: middle;
+}
+.run-kind-tag.scheduled { background: var(--bg-active); color: var(--accent); }
 .run-summary:hover { background: var(--bg-hover); }
 .run-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .run-time { font-weight: 600; font-size: 13px; }
@@ -607,6 +642,7 @@ button.icon-btn:hover {
 var state = {
   tree: null,
   scan: null,
+  scanRange: "7d",
   view: "memory",
   selectedRepoKey: null,
   selectedBranch: null,
@@ -926,14 +962,40 @@ function toggleRun(card, runId) {
   });
 }
 
+function formatTokensCompact(n) {
+  var num = Number(n || 0);
+  if (num >= 1000000) return (num / 1000000).toFixed(2) + "M";
+  if (num >= 1000) return (num / 1000).toFixed(1) + "K";
+  return String(num);
+}
+
+function loadScanView(range) {
+  if (range) state.scanRange = range;
+  var r = state.scanRange || "7d";
+  fetch("/api/session-scan?limit=100&offset=0&range=" + encodeURIComponent(r)).then(function (resp) {
+    if (!resp.ok) throw new Error(resp.status + " " + resp.statusText);
+    return resp.json();
+  }).then(function (data) {
+    state.scan = data;
+    var totals = data.totals || {};
+    q("#meta").textContent =
+      data.run_count + " 轮（定时 " + Number(totals.scheduled_runs || 0) + " 轮）· 消耗 "
+      + formatTokensCompact(totals.total_tokens || 0) + " tokens · " + data.scanRoot;
+    renderScan();
+  }).catch(function (err) {
+    q("#meta").textContent = "错误：" + err.message;
+  });
+}
+
 function loadOlderRuns() {
   if (!state.scan || !state.scan.has_more) return;
   var content = q("#content");
   var scrollTop = content.scrollTop;
   var offset = state.scan.runs.length;
-  fetch("/api/session-scan?limit=100&offset=" + offset).then(function (r) {
-    if (!r.ok) throw new Error(r.status + " " + r.statusText);
-    return r.json();
+  var r = state.scanRange || "7d";
+  fetch("/api/session-scan?limit=100&offset=" + offset + "&range=" + encodeURIComponent(r)).then(function (resp) {
+    if (!resp.ok) throw new Error(resp.status + " " + resp.statusText);
+    return resp.json();
   }).then(function (data) {
     state.scan.runs = state.scan.runs.concat(data.runs || []);
     state.scan.has_more = !!data.has_more;
@@ -956,24 +1018,76 @@ function renderScan() {
     return;
   }
   var latestRun = data.runs && data.runs[0];
+  var rangeBar = el("div", { class: "range-bar", role: "tablist", "aria-label": "时间范围" });
+  [
+    ["24h", "24 小时"],
+    ["7d", "近 7 天"],
+    ["30d", "近 30 天"],
+    ["all", "全部"],
+  ].forEach(function (pair) {
+    var btn = el("button", {
+      class: "range-btn" + (state.scanRange === pair[0] ? " active" : ""),
+    }, pair[1]);
+    btn.onclick = function () { loadScanView(pair[0]); };
+    rangeBar.appendChild(btn);
+  });
+
   content.appendChild(el("div", { class: "scan-intro" },
     el("div", { class: "repo-header" },
       el("div", { class: "eyebrow" }, "Session scan ledger"),
       el("h2", null, "扫描任务"),
       el("div", { class: "path mono" }, data.scanRoot)
     ),
-    latestRun ? el("div", { class: "scan-live" }, "最近触发 " + formatDateTime(latestRun.started_at)) : null
+    el("div", { style: "display:flex;align-items:center;gap:12px;flex-wrap:wrap;" },
+      rangeBar,
+      latestRun ? el("div", { class: "scan-live" }, "最近触发 " + formatDateTime(latestRun.started_at)) : null
+    )
   ));
   var totalsData = data.totals || {};
   var totals = el("div", { class: "stat-row" });
-  totals.appendChild(stat("触发轮次", data.run_count));
+  totals.appendChild(stat("定时任务轮次", Number(totalsData.scheduled_runs || 0).toLocaleString() + " / " + Number(data.run_count || 0).toLocaleString()));
+  totals.appendChild(stat("Token 总消耗", formatTokensCompact(totalsData.total_tokens || 0)));
   totals.appendChild(stat("完成任务", Number(totalsData.done || 0).toLocaleString()));
   totals.appendChild(stat("无需写入", Number(totalsData.summary_skipped || 0).toLocaleString()));
   totals.appendChild(stat("失败尝试", Number(totalsData.failed || 0).toLocaleString()));
   totals.appendChild(stat("空轮询", Number(totalsData.idle_runs || 0).toLocaleString()));
   content.appendChild(totals);
 
-  var pulsePanel = el("div", { class: "pulse-panel" });
+  var series = data.time_series || [];
+  if (series.length) {
+    var maxTokens = series.reduce(function (m, item) { return Math.max(m, Number(item.tokens || 0)); }, 0);
+    var tokenPanel = el("div", { class: "token-panel" });
+    tokenPanel.appendChild(el("div", { class: "pulse-header" },
+      el("span", null, "时间段 Token 消耗（按" + (data.bucket === "hour" ? "小时" : "天") + "聚合 · 共 " + series.length + " 段）"),
+      el("span", null, "峰值 " + Number(maxTokens).toLocaleString() + " tokens · 总计 " + Number(totalsData.total_tokens || 0).toLocaleString() + " tokens")
+    ));
+    var bars = el("div", { class: "token-bars" });
+    series.forEach(function (item) {
+      var tok = Number(item.tokens || 0);
+      var pct = maxTokens > 0 ? Math.max(tok > 0 ? 6 : 2, Math.round((tok / maxTokens) * 100)) : 2;
+      var col = el("div", {
+        class: "token-col",
+        title: item.bucket + "\nToken 消耗: " + tok.toLocaleString()
+          + "\n定时 / 总轮次: " + item.scheduled_count + " / " + item.run_count
+          + "\n完成 / 失败: " + item.done_count + " / " + item.failed_count,
+      });
+      var barClass = "token-bar" + (tok === 0 ? " zero" : (item.failed_count > 0 && item.done_count === 0 ? " has-fail" : ""));
+      col.appendChild(el("div", { class: barClass, style: "height:" + pct + "%;" }));
+      bars.appendChild(col);
+    });
+    tokenPanel.appendChild(bars);
+    var firstLabel = series[0].bucket;
+    var midLabel = series.length > 2 ? series[Math.floor(series.length / 2)].bucket : "";
+    var lastLabel = series.length > 1 ? series[series.length - 1].bucket : "";
+    tokenPanel.appendChild(el("div", { class: "token-axis" },
+      el("span", null, firstLabel),
+      el("span", null, midLabel),
+      el("span", null, lastLabel)
+    ));
+    content.appendChild(tokenPanel);
+  }
+
+  var pulsePanel = el("div", { class: "pulse-panel", style: "margin-top:12px;" });
   pulsePanel.appendChild(el("div", { class: "pulse-header" },
     el("span", null, "最近 " + Math.min(50, data.runs.length) + " 轮"),
     el("span", null, "每个竖条代表一次调度触发")
@@ -982,7 +1096,7 @@ function renderScan() {
   data.runs.slice(0, 50).reverse().forEach(function (run) {
     var pulse = el("button", {
       class: "pulse " + run.outcome,
-      title: formatDateTime(run.started_at) + " · " + outcomeLabel(run.outcome) + " · " + run.run_id,
+      title: formatDateTime(run.started_at) + " · " + outcomeLabel(run.outcome) + " · " + Number(run.summary_tokens || 0).toLocaleString() + " tokens · " + run.run_id,
       "aria-label": outcomeLabel(run.outcome) + "，" + formatDateTime(run.started_at),
     });
     pulse.onclick = function () {
@@ -1007,14 +1121,24 @@ function renderScan() {
   var ledger = el("div", { class: "run-ledger" });
   data.runs.forEach(function (run) {
     var card = el("article", { class: "run-card", id: "run-" + run.run_id });
+    var kindLabel = run.run_kind === "daily_housekeeping"
+      ? "日整理"
+      : (run.run_kind === "replay" ? "重放" : (run.scheduled ? "定时" : "手动"));
     var summary = el("button", { class: "run-summary", "aria-expanded": "false" },
       el("div", null,
-        el("div", { class: "run-time" }, formatDateTime(run.started_at)),
+        el("div", { class: "run-time" },
+          formatDateTime(run.started_at),
+          el("span", { class: "run-kind-tag" + (run.scheduled ? " scheduled" : "") }, kindLabel)
+        ),
         el("div", { class: "run-id mono" }, run.run_id + " · " + formatDuration(run.duration_ms))
       ),
       el("div", null,
         el("span", { class: "status-pill " + run.outcome }, outcomeLabel(run.outcome)),
         el("div", { class: "run-engine" }, [run.executor || "未调用模型", run.model].filter(Boolean).join(" / "))
+      ),
+      el("div", { class: "run-metric", title: Number(run.summary_tokens || 0).toLocaleString() + " tokens" },
+        el("strong", null, formatTokensCompact(run.summary_tokens || 0)),
+        el("span", null, "Token")
       ),
       el("div", { class: "run-metric" }, el("strong", null, run.candidate_count), el("span", null, "候选")),
       el("div", { class: "run-metric" }, el("strong", null, run.done_count), el("span", null, "完成")),
@@ -1033,6 +1157,26 @@ function renderScan() {
     var more = el("button", { class: "icon-btn", style: "display:block;margin:14px auto 0;" }, "加载更早轮次");
     more.onclick = loadOlderRuns;
     content.appendChild(more);
+  }
+
+  if (series.length) {
+    content.appendChild(el("h3", { class: "section-title" }, "时段消耗明细（按" + (data.bucket === "hour" ? "小时" : "天") + "）"));
+    var bucketTable = el("table", { class: "scan-table" });
+    bucketTable.innerHTML = "<thead><tr><th>时间段</th><th class='num'>定时轮次</th><th class='num'>总轮次</th><th class='num'>完成</th><th class='num'>失败</th><th class='num'>总耗时</th><th class='num'>Token 总量</th></tr></thead>";
+    var bucketBody = el("tbody");
+    series.slice().reverse().slice(0, 60).forEach(function (item) {
+      bucketBody.appendChild(el("tr", null,
+        el("td", { class: "mono" }, item.bucket),
+        el("td", { class: "num" }, item.scheduled_count),
+        el("td", { class: "num" }, item.run_count),
+        el("td", { class: "num" }, item.done_count),
+        el("td", { class: "num" }, item.failed_count),
+        el("td", { class: "num" }, formatDuration(item.duration_ms)),
+        el("td", { class: "num" }, Number(item.tokens || 0).toLocaleString())
+      ));
+    });
+    bucketTable.appendChild(bucketBody);
+    content.appendChild(bucketTable);
   }
 
   if (data.repos.length) {
@@ -1060,11 +1204,7 @@ function setView(view) {
   q("#memoryView").classList.toggle("active", view === "memory");
   q("#scanView").classList.toggle("active", view === "scan");
   if (view === "scan") {
-    fetch("/api/session-scan?limit=100&offset=0").then(function (r) { return r.json(); }).then(function (data) {
-      state.scan = data;
-      q("#meta").textContent = data.run_count + " 轮任务扫描 · " + data.repos.length + " 个仓库 · " + data.scanRoot;
-      renderScan();
-    }).catch(function (err) { q("#meta").textContent = "错误：" + err.message; });
+    loadScanView(state.scanRange || "7d");
   } else {
     q(".sidebar").style.display = "block";
     q("#content").style.gridColumn = "";
